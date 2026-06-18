@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from app import db
-from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback
+from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback, DeviceProfile, StepCardDeviceTip
 
 def seed_data():
     if User.query.count() > 0:
@@ -10,6 +10,23 @@ def seed_data():
     u2 = User(name='小明', role='family', phone='13900139002')
     u3 = User(name='李爷爷', role='elder', phone='13700137003')
     db.session.add_all([u1, u2, u3])
+    db.session.flush()
+
+    dp1 = DeviceProfile(
+        user_id=u1.id, device_brand='华为', system_version='HarmonyOS 4',
+        font_size_preference='大', simple_mode_enabled=True,
+        common_apps='微信,抖音,电话,短信,相机',
+        network_environment='WiFi',
+        difficulty_tags='找不到入口,看不清字'
+    )
+    dp3 = DeviceProfile(
+        user_id=u3.id, device_brand='小米', system_version='MIUI 14',
+        font_size_preference='超大', simple_mode_enabled=True,
+        common_apps='微信,电话,相册,支付宝',
+        network_environment='4G',
+        difficulty_tags='找不到入口,不会切换网络,误触广告'
+    )
+    db.session.add_all([dp1, dp3])
     db.session.flush()
 
     sc1 = StepCard(title='调大手机字体', problem_type='看不清字', difficulty='easy',
@@ -48,6 +65,49 @@ def seed_data():
     ]
     db.session.add_all(steps_sc1 + steps_sc3 + steps_sc4)
 
+    device_tips_data = [
+        StepCardDeviceTip(step_card_id=sc1.id, step_number=1, device_brand='华为',
+                         system_version='HarmonyOS 4', adaptation_tip='华为手机「设置」在桌面或应用抽屉中，图标为齿轮',
+                         entry_name='设置'),
+        StepCardDeviceTip(step_card_id=sc1.id, step_number=1, device_brand='苹果',
+                         system_version='iOS 16', adaptation_tip='iPhone「设置」图标是灰色齿轮，在第一屏',
+                         entry_name='Settings'),
+        StepCardDeviceTip(step_card_id=sc1.id, step_number=2, device_brand='华为',
+                         system_version='HarmonyOS 4', adaptation_tip='华为手机叫「显示和亮度」，在设置列表中上部',
+                         entry_name='显示和亮度'),
+        StepCardDeviceTip(step_card_id=sc1.id, step_number=2, device_brand='苹果',
+                         system_version='iOS 16', adaptation_tip='iPhone 叫「显示与亮度」，在设置列表中',
+                         entry_name='Display & Brightness'),
+        StepCardDeviceTip(step_card_id=sc1.id, step_number=2, device_brand='小米',
+                         system_version='MIUI 14', adaptation_tip='小米手机叫「显示」，在设置中',
+                         entry_name='显示'),
+        StepCardDeviceTip(step_card_id=sc1.id, step_number=3, device_brand='华为',
+                         system_version='HarmonyOS 4', adaptation_tip='华为叫「字体与显示大小」',
+                         entry_name='字体与显示大小'),
+        StepCardDeviceTip(step_card_id=sc1.id, step_number=3, device_brand='苹果',
+                         system_version='iOS 16', adaptation_tip='iPhone 在「显示与亮度」里点击「文字大小」',
+                         entry_name='文字大小'),
+        StepCardDeviceTip(step_card_id=sc3.id, step_number=2, device_brand='华为',
+                         system_version='HarmonyOS 4', adaptation_tip='华为快捷面板中叫「WLAN」，长按进入',
+                         entry_name='WLAN'),
+        StepCardDeviceTip(step_card_id=sc3.id, step_number=2, device_brand='苹果',
+                         system_version='iOS 16', adaptation_tip='iPhone 在「设置」中找「无线局域网」',
+                         entry_name='无线局域网'),
+        StepCardDeviceTip(step_card_id=sc3.id, step_number=2, device_brand='小米',
+                         system_version='MIUI 14', adaptation_tip='小米叫「WLAN」，在设置第一项',
+                         entry_name='WLAN'),
+        StepCardDeviceTip(step_card_id=sc4.id, step_number=1, device_brand='华为',
+                         system_version='HarmonyOS 4', adaptation_tip='华为相册图标是彩色花朵，桌面上可找到',
+                         entry_name='图库'),
+        StepCardDeviceTip(step_card_id=sc4.id, step_number=1, device_brand='苹果',
+                         system_version='iOS 16', adaptation_tip='iPhone 相册叫「照片」，图标是彩色风车',
+                         entry_name='照片'),
+        StepCardDeviceTip(step_card_id=sc4.id, step_number=1, device_brand='小米',
+                         system_version='MIUI 14', adaptation_tip='小米相册图标是彩色花',
+                         entry_name='相册'),
+    ]
+    db.session.add_all(device_tips_data)
+
     now = datetime.utcnow()
     helps = []
     problem_types = ['看不清字', '找不到入口', '误触广告', '不会切换网络', '支付设置', '看不清字', '找不到入口', '误触广告', '不会切换网络', '看不清字', '找不到入口']
@@ -58,6 +118,7 @@ def seed_data():
             description=f'遇到了{pt}的问题，不知道怎么办',
             device_brand=['华为', '苹果', '小米', 'OPPO'][i % 4],
             system_version=['HarmonyOS 3', 'iOS 16', 'MIUI 14', 'ColorOS 13'][i % 4],
+            device_profile_id=dp1.id if i % 2 == 0 else dp3.id,
             status='resolved' if i < 9 else 'pending',
             requester_id=[u1.id, u3.id][i % 2],
             helper_id=u2.id,

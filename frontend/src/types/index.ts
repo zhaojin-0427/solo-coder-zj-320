@@ -29,6 +29,8 @@ export interface HelpRequest {
   requester_id?: number
   helper_id?: number
   step_card_id?: number
+  device_profile_id?: number
+  device_profile?: DeviceProfile
   requester?: User
   helper?: User
   created_at?: string
@@ -48,6 +50,16 @@ export interface StepCardStep {
   image_url?: string
 }
 
+export interface StepCardDeviceTip {
+  id: number
+  step_card_id: number
+  step_number: number
+  device_brand: string
+  system_version?: string
+  adaptation_tip: string
+  entry_name?: string
+}
+
 export interface StepCard {
   id: number
   title: string
@@ -61,6 +73,7 @@ export interface StepCard {
   created_at?: string
   updated_at?: string
   steps: StepCardStep[]
+  device_tips: StepCardDeviceTip[]
 }
 
 export interface StatsOverview {
@@ -149,3 +162,28 @@ export const SYSTEM_VERSIONS = [
   'OriginOS 4',
   '其他'
 ]
+
+export interface DeviceProfile {
+  id: number
+  user_id: number
+  device_brand?: string
+  system_version?: string
+  font_size_preference?: string
+  simple_mode_enabled: boolean
+  common_apps?: string
+  network_environment?: string
+  difficulty_tags?: string
+  updated_at?: string
+  user?: User
+}
+
+export interface DeviceStats {
+  brand_distribution: { brand: string; count: number }[]
+  system_distribution: { system: string; count: number }[]
+  brand_avg_duration: { brand: string; avg_duration: number }[]
+  brand_problem_distribution: { brand: string; problem_type: string; count: number }[]
+  top_difficulty_tags: { tag: string; count: number }[]
+}
+
+export const FONT_SIZE_OPTIONS = ['标准', '大', '超大'] as const
+export const NETWORK_OPTIONS = ['WiFi', '4G', '5G', '不确定'] as const

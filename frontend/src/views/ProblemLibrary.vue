@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { stepcardApi, practiceApi, helpApi } from '@/api'
-import { PROBLEM_TYPES, type StepCard, type PracticeRecord, type PracticeStepFeedback } from '@/types'
+import { stepcardApi, practiceApi, helpApi, deviceApi } from '@/api'
+import { PROBLEM_TYPES, DEVICE_BRANDS, type StepCard, type PracticeRecord, type PracticeStepFeedback, type DeviceProfile, type StepCardDeviceTip } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,6 +20,28 @@ const practiceFeedback = ref('')
 const showHelpConvertModal = ref(false)
 const helpDescription = ref('')
 const practiceCompleted = ref(false)
+
+const deviceProfile = ref<DeviceProfile | null>(null)
+const deviceBrandFilter = ref('')
+
+const loadDeviceProfile = async () => {
+  try {
+    const profile = await deviceApi.getProfileByUser(1)
+    if (profile) {
+      deviceProfile.value = profile
+      deviceBrandFilter.value = profile.device_brand || ''
+    }
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+const getDeviceTipForStep = (stepNumber: number): StepCardDeviceTip | undefined => {
+  if (!viewingCard.value || !deviceBrandFilter.value) return undefined
+  return viewingCard.value.device_tips?.find(
+    t => t.step_number === stepNumber && t.device_brand === deviceBrandFilter.value
+  )
+}
 
 const filteredCards = computed(() => {
   let list = cards.value
@@ -207,7 +229,10 @@ const statusLabel = (status: PracticeStepFeedback['status']) => {
   }
 }
 
-onMounted(fetchCards)
+onMounted(() => {
+  fetchCards()
+  loadDeviceProfile()
+})
 </script>
 
 <template>
@@ -229,6 +254,13 @@ onMounted(fetchCards)
           class="search-input"
           placeholder="搜索问题关键词，如：字体、WiFi、相册..."
         />
+      </div>
+      <div class="device-filter-row" v-if="deviceProfile">
+        <span class="device-filter-label">📱 按设备筛选：</span>
+        <select v-model="deviceBrandFilter" class="device-filter-select">
+          <option value="">全部设备</option>
+          <option v-for="b in DEVICE_BRANDS" :key="b" :value="b">{{ b }}</option>
+        </select>
       </div>
     </div>
 
@@ -283,6 +315,9 @@ onMounted(fetchCards)
           </div>
         </div>
         <p class="library-card-desc">{{ card.description || '暂无描述' }}</p>
+        <div v-if="card.device_tips && card.device_tips.length > 0 && deviceBrandFilter && card.device_tips.some(t => t.device_brand === deviceBrandFilter)" class="library-card-adapt">
+          📱 含{{ deviceBrandFilter }}适配说明
+        </div>
         <div class="library-card-footer">
           <span>📋 {{ card.steps.length }} 个步骤</span>
           <span>🔥 使用 {{ card.usage_count }} 次</span>
@@ -346,6 +381,13 @@ onMounted(fetchCards)
                 <div class="step-content">
                   <div class="step-text">{{ step.content }}</div>
                   <div v-if="step.tip" class="tip-box">💡 小提示：{{ step.tip }}</div>
+                  <div v-if="getDeviceTipForStep(step.step_number)" class="adapt-tip-box">
+                    <div class="adapt-tip-header">📱 {{ getDeviceTipForStep(step.step_number)!.device_brand }} 适配提示</div>
+                    <div class="adapt-tip-content">{{ getDeviceTipForStep(step.step_number)!.adaptation_tip }}</div>
+                    <div v-if="getDeviceTipForStep(step.step_number)!.entry_name" class="adapt-tip-entry">
+                      入口名称：<strong>{{ getDeviceTipForStep(step.step_number)!.entry_name }}</strong>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1038,5 +1080,67 @@ onMounted(fetchCards)
   color: #dc2626;
   border-radius: 10px;
   font-size: 15px;
+}
+
+.device-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.device-filter-label {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
+}
+
+.device-filter-select {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: none;
+  font-size: 14px;
+  background: white;
+  color: #1e293b;
+  cursor: pointer;
+  outline: none;
+}
+
+.library-card-adapt {
+  padding: 4px 10px;
+  background: #e0f2fe;
+  color: #0369a1;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-block;
+  margin-bottom: 4px;
+}
+
+.adapt-tip-box {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  border-radius: 10px;
+  border-left: 4px solid #0284c7;
+}
+
+.adapt-tip-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0c4a6e;
+  margin-bottom: 6px;
+}
+
+.adapt-tip-content {
+  font-size: 14px;
+  color: #0369a1;
+  line-height: 1.6;
+}
+
+.adapt-tip-entry {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #0c4a6e;
 }
 </style>

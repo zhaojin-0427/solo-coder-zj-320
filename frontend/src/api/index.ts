@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { HelpRequest, StepCard, User, StatsOverview, GuidanceRecord, PracticeRecord, PracticeStepFeedback, CardPracticeStats, PracticeStats, StepCardStep } from '@/types'
+import type { HelpRequest, StepCard, User, StatsOverview, GuidanceRecord, PracticeRecord, PracticeStepFeedback, CardPracticeStats, PracticeStats, StepCardStep, DeviceProfile, DeviceStats, StepCardDeviceTip } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -23,8 +23,8 @@ export const helpApi = {
 }
 
 export const stepcardApi = {
-  list: (problem_type?: string) =>
-    api.get<StepCard[]>('/stepcard/', { params: problem_type ? { problem_type } : {} }).then(r => r.data),
+  list: (params?: { problem_type?: string; device_brand?: string }) =>
+    api.get<StepCard[]>('/stepcard/', { params: params || {} }).then(r => r.data),
   get: (id: number) => api.get<StepCard>(`/stepcard/${id}`).then(r => r.data),
   create: (data: Partial<StepCard> & { steps?: any[] }) =>
     api.post<StepCard>('/stepcard/', data).then(r => r.data),
@@ -34,7 +34,17 @@ export const stepcardApi = {
   addTip: (id: number, data: { step_number: number; tip: string }) =>
     api.post<StepCardStep>(`/stepcard/${id}/add_tip`, data).then(r => r.data),
   getPracticeStats: (id: number) =>
-    api.get<CardPracticeStats>(`/practice/card_stats/${id}`).then(r => r.data)
+    api.get<CardPracticeStats>(`/practice/card_stats/${id}`).then(r => r.data),
+  getDeviceTips: (id: number) =>
+    api.get<StepCardDeviceTip[]>(`/stepcard/${id}/device_tips`).then(r => r.data),
+  addDeviceTip: (id: number, data: Partial<StepCardDeviceTip>) =>
+    api.post<StepCardDeviceTip>(`/stepcard/${id}/device_tips`, data).then(r => r.data),
+  updateDeviceTip: (id: number, tipId: number, data: Partial<StepCardDeviceTip>) =>
+    api.put<StepCardDeviceTip>(`/stepcard/${id}/device_tips/${tipId}`, data).then(r => r.data),
+  deleteDeviceTip: (id: number, tipId: number) =>
+    api.delete(`/stepcard/${id}/device_tips/${tipId}`).then(r => r.data),
+  getAdaptation: (id: number, params?: { device_brand?: string; system_version?: string }) =>
+    api.get(`/stepcard/${id}/adaptation`, { params: params || {} }).then(r => r.data)
 }
 
 export const practiceApi = {
@@ -63,5 +73,18 @@ export const practiceApi = {
 export const statsApi = {
   overview: () => api.get<StatsOverview>('/stats/overview').then(r => r.data),
   timeline: () => api.get<{ date: string; count: number }[]>('/stats/timeline').then(r => r.data),
-  practice: () => api.get<PracticeStats>('/stats/practice').then(r => r.data)
+  practice: () => api.get<PracticeStats>('/stats/practice').then(r => r.data),
+  device: () => api.get<DeviceStats>('/stats/device').then(r => r.data)
+}
+
+export const deviceApi = {
+  listProfiles: () => api.get<DeviceProfile[]>('/device/profiles').then(r => r.data),
+  getProfile: (id: number) => api.get<DeviceProfile>(`/device/profiles/${id}`).then(r => r.data),
+  getProfileByUser: (userId: number) => api.get<DeviceProfile | null>(`/device/profiles/user/${userId}`).then(r => r.data),
+  createProfile: (data: Partial<DeviceProfile>) =>
+    api.post<DeviceProfile>('/device/profiles', data).then(r => r.data),
+  updateProfile: (id: number, data: Partial<DeviceProfile>) =>
+    api.put<DeviceProfile>(`/device/profiles/${id}`, data).then(r => r.data),
+  supplementProfile: (id: number, data: Partial<DeviceProfile>) =>
+    api.post<DeviceProfile>(`/device/profiles/${id}/supplement`, data).then(r => r.data)
 }

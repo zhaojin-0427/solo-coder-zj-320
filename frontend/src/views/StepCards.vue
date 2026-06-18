@@ -1,12 +1,22 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { stepcardApi } from '@/api'
-import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard, type StepCardStep, type CardPracticeStats } from '@/types'
+import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard, type StepCardStep, type CardPracticeStats, type StepCardDeviceTip } from '@/types'
 
 const cards = ref<StepCard[]>([])
 const filterType = ref<string>('all')
 const showCreateModal = ref(false)
 const cardStatsMap = ref<Map<number, CardPracticeStats>>(new Map())
+
+const showDeviceTipModal = ref(false)
+const selectedCardForTips = ref<StepCard | null>(null)
+const newDeviceTip = ref({
+  step_number: 1,
+  device_brand: '',
+  system_version: '',
+  adaptation_tip: '',
+  entry_name: ''
+})
 
 const newCard = ref({
   title: '',
@@ -101,6 +111,56 @@ const submitCard = async () => {
   }
 }
 
+const openDeviceTipModal = (card: StepCard) => {
+  selectedCardForTips.value = card
+  newDeviceTip.value = {
+    step_number: 1,
+    device_brand: '',
+    system_version: '',
+    adaptation_tip: '',
+    entry_name: ''
+  }
+  showDeviceTipModal.value = true
+}
+
+const submitDeviceTip = async () => {
+  if (!selectedCardForTips.value) return
+  if (!newDeviceTip.value.device_brand || !newDeviceTip.value.adaptation_tip) {
+    alert('请填写设备品牌和适配提示')
+    return
+  }
+  try {
+    await stepcardApi.addDeviceTip(selectedCardForTips.value.id, newDeviceTip.value)
+    showDeviceTipModal.value = false
+    await fetchCards()
+  } catch (e) {
+    console.error(e)
+    alert('添加适配提示失败')
+  }
+}
+
+const deleteDeviceTip = async (cardId: number, tipId: number) => {
+  try {
+    await stepcardApi.deleteDeviceTip(cardId, tipId)
+    await fetchCards()
+  } catch (e) {
+    console.error(e)
+    alert('删除适配提示失败')
+  }
+}
+
+const getDeviceTipsGrouped = (card: StepCard): Map<string, StepCardDeviceTip[]> => {
+  const grouped = new Map<string, StepCardDeviceTip[]>()
+  if (!card.device_tips) return grouped
+  for (const tip of card.device_tips) {
+    const key = tip.device_brand
+    const existing = grouped.get(key) || []
+    existing.push(tip)
+    grouped.set(key, existing)
+  }
+  return grouped
+}
+
 const difficultyLabel = (d: string) => {
   return d === 'easy' ? '简单' : d === 'normal' ? '一般' : '较难'
 }
@@ -190,6 +250,26 @@ onMounted(fetchCards)
               {{ getCardStats(card.id)?.completion_rate_percent }}%
             </span>
           </div>
+        </div>
+
+        <div v-if="card.device_tips && card.device_tips.length > 0" class="device-tips-section">
+          <div class="device-tips-header">
+            <span class="device-tips-title">📱 多设备适配说明</span>
+            <button class="btn btn-secondary btn-sm" @click="openDeviceTipModal(card)">+ 添加</button>
+          </div>
+          <div v-for="[brand, tips] in getDeviceTipsGrouped(card)" :key="brand" class="device-tip-brand-group">
+            <div class="device-tip-brand-label">{{ brand }}</div>
+            <div v-for="tip in tips" :key="tip.id" class="device-tip-item">
+              <span class="device-tip-step">第{{ tip.step_number }}步：</span>
+              <span class="device-tip-text">{{ tip.adaptation_tip }}</span>
+              <span v-if="tip.entry_name" class="device-tip-entry">入口：{{ tip.entry_name }}</span>
+              <button class="device-tip-delete" @click="deleteDeviceTip(card.id, tip.id)">×</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="device-tips-add">
+          <button class="btn btn-secondary btn-sm" @click="openDeviceTipModal(card)">📱 添加多设备适配说明</button>
         </div>
       </div>
 
@@ -294,6 +374,57 @@ onMounted(fetchCards)
         <div class="modal-footer">
           <button class="btn btn-secondary" @click="showCreateModal = false">取消</button>
           <button class="btn btn-primary" @click="submitCard">保存步骤卡</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showDeviceTipModal" class="modal-overlay" @click.self="showDeviceTipModal = false">
+      <div class="modal-content" style="max-width: 560px;">
+        <div class="modal-header">
+          <h3>📱 添加设备适配说明</h3>
+          <button class="modal-close" @click="showDeviceTipModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-sm text-muted mb-4">
+            为步骤卡「{{ selectedCardForTips?.title }}」添加不同品牌/系统的操作差异说明。
+          </p>
+          <div class="grid grid-2">
+            <div class="form-group">
+              <label class="form-label">步骤编号 *</label>
+              <input v-model.number="newDeviceTip.step_number" class="form-input" type="number" min="1" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">设备品牌 *</label>
+              <select v-model="newDeviceTip.device_brand" class="form-select">
+                <option value="">请选择</option>
+                <option v-for="b in DEVICE_BRANDS" :key="b" :value="b">{{ b }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">系统版本</label>
+              <select v-model="newDeviceTip.system_version" class="form-select">
+                <option value="">通用</option>
+                <option v-for="s in SYSTEM_VERSIONS" :key="s" :value="s">{{ s }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">入口名称</label>
+              <input v-model="newDeviceTip.entry_name" class="form-input" placeholder="例如：设置、图库" />
+            </div>
+            <div class="form-group" style="grid-column: span 2">
+              <label class="form-label">适配说明 *</label>
+              <textarea
+                v-model="newDeviceTip.adaptation_tip"
+                class="form-textarea"
+                rows="3"
+                placeholder="描述该设备上的操作差异，例如：华为手机叫「图库」而不是「相册」..."
+              ></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showDeviceTipModal = false">取消</button>
+          <button class="btn btn-primary" @click="submitDeviceTip">添加适配说明</button>
         </div>
       </div>
     </div>
@@ -572,5 +703,90 @@ onMounted(fetchCards)
 
 .text-orange {
   color: #ea580c;
+}
+
+.device-tips-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e0f2fe;
+}
+
+.device-tips-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.device-tips-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0369a1;
+}
+
+.device-tip-brand-group {
+  margin-bottom: 8px;
+}
+
+.device-tip-brand-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0284c7;
+  margin-bottom: 4px;
+  padding-left: 4px;
+}
+
+.device-tip-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #f0f9ff;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.device-tip-step {
+  font-weight: 600;
+  color: #0c4a6e;
+  flex-shrink: 0;
+}
+
+.device-tip-text {
+  flex: 1;
+}
+
+.device-tip-entry {
+  background: #bae6fd;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0c4a6e;
+  flex-shrink: 0;
+}
+
+.device-tip-delete {
+  background: none;
+  border: none;
+  color: #ef4444;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.device-tip-delete:hover {
+  color: #dc2626;
+}
+
+.device-tips-add {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
 }
 </style>

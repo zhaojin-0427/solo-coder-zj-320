@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { helpApi, stepcardApi, practiceApi } from '@/api'
-import type { HelpRequest, PracticeRecord, StepCardStep } from '@/types'
+import { helpApi, stepcardApi, practiceApi, deviceApi } from '@/api'
+import type { HelpRequest, PracticeRecord, StepCardStep, DeviceProfile } from '@/types'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -19,6 +19,16 @@ const showTipModal = ref(false)
 const tipStepNumber = ref(0)
 const tipContent = ref('')
 const tipStepId = ref(0)
+
+const showDeviceSupplementModal = ref(false)
+const supplementProfileId = ref<number | null>(null)
+const supplementData = ref({
+  device_brand: '',
+  system_version: '',
+  difficulty_tags: '',
+  common_apps: '',
+  network_environment: ''
+})
 
 const filteredHelps = computed(() => {
   if (filterStatus.value === 'all') return helps.value
@@ -136,6 +146,35 @@ const formatTime = (t?: string) => {
   if (!t) return ''
   const d = new Date(t)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+const openDeviceSupplement = (profileId: number | undefined, helpRequest: HelpRequest) => {
+  if (!profileId) return
+  supplementProfileId.value = profileId
+  supplementData.value = {
+    device_brand: helpRequest.device_brand || '',
+    system_version: helpRequest.system_version || '',
+    difficulty_tags: helpRequest.problem_type || '',
+    common_apps: '',
+    network_environment: ''
+  }
+  showDeviceSupplementModal.value = true
+}
+
+const submitSupplement = async () => {
+  if (!supplementProfileId.value) return
+  try {
+    await deviceApi.supplementProfile(supplementProfileId.value, supplementData.value)
+    alert('设备档案已更新')
+    showDeviceSupplementModal.value = false
+    if (selectedHelp.value) {
+      const updated = await helpApi.get(selectedHelp.value.id)
+      selectedHelp.value = updated
+    }
+  } catch (e) {
+    console.error(e)
+    alert('更新设备档案失败')
+  }
 }
 
 const fetchAll = () => {
@@ -259,6 +298,61 @@ onMounted(fetchAll)
         <div class="detail-section">
           <h4 class="detail-subtitle">问题描述</h4>
           <p class="detail-description">{{ selectedHelp.description || '暂无详细描述' }}</p>
+
+          <div v-if="selectedHelp.device_profile" class="device-profile-section">
+            <div class="device-profile-header">
+              <h4 class="detail-subtitle">📱 关联设备档案</h4>
+              <button class="btn btn-secondary btn-sm" @click="openDeviceSupplement(selectedHelp.device_profile_id, selectedHelp)">
+                ✏️ 补充档案
+              </button>
+            </div>
+            <div class="device-profile-grid">
+              <div class="device-profile-item">
+                <span class="dp-label">设备品牌</span>
+                <span class="dp-value">{{ selectedHelp.device_profile.device_brand || '未设置' }}</span>
+              </div>
+              <div class="device-profile-item">
+                <span class="dp-label">系统版本</span>
+                <span class="dp-value">{{ selectedHelp.device_profile.system_version || '未设置' }}</span>
+              </div>
+              <div class="device-profile-item">
+                <span class="dp-label">字体偏好</span>
+                <span class="dp-value">{{ selectedHelp.device_profile.font_size_preference || '未设置' }}</span>
+              </div>
+              <div class="device-profile-item">
+                <span class="dp-label">简易模式</span>
+                <span class="dp-value">{{ selectedHelp.device_profile.simple_mode_enabled ? '已开启' : '未开启' }}</span>
+              </div>
+              <div class="device-profile-item">
+                <span class="dp-label">常用App</span>
+                <span class="dp-value">{{ selectedHelp.device_profile.common_apps || '未设置' }}</span>
+              </div>
+              <div class="device-profile-item">
+                <span class="dp-label">网络环境</span>
+                <span class="dp-value">{{ selectedHelp.device_profile.network_environment || '未设置' }}</span>
+              </div>
+            </div>
+            <div v-if="selectedHelp.device_profile.difficulty_tags" class="device-profile-tags">
+              <span class="dp-label">高频困难：</span>
+              <span v-for="tag in selectedHelp.device_profile.difficulty_tags.split(',')" :key="tag" class="tag">{{ tag.trim() }}</span>
+            </div>
+          </div>
+          <div v-else-if="selectedHelp.device_brand" class="device-profile-section">
+            <div class="device-profile-header">
+              <h4 class="detail-subtitle">📱 设备信息</h4>
+            </div>
+            <div class="device-profile-grid">
+              <div class="device-profile-item">
+                <span class="dp-label">设备品牌</span>
+                <span class="dp-value">{{ selectedHelp.device_brand }}</span>
+              </div>
+              <div class="device-profile-item">
+                <span class="dp-label">系统版本</span>
+                <span class="dp-value">{{ selectedHelp.system_version || '未设置' }}</span>
+              </div>
+            </div>
+          </div>
+
           <div v-if="selectedHelp.image_url" class="screenshot-preview">
             <img :src="selectedHelp.image_url" alt="问题截图" />
           </div>
@@ -477,6 +571,46 @@ onMounted(fetchAll)
         <div class="modal-footer">
           <button class="btn btn-secondary" @click="showTipModal = false">取消</button>
           <button class="btn btn-primary" @click="submitTip">确认添加</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showDeviceSupplementModal" class="modal-overlay" @click.self="showDeviceSupplementModal = false">
+      <div class="modal-content" style="max-width: 560px;">
+        <div class="modal-header">
+          <h3>📱 补充设备档案</h3>
+          <button class="modal-close" @click="showDeviceSupplementModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-sm text-muted mb-4">
+            将本次指导中发现的设备差异补充回设备档案，帮助下次更精准匹配步骤卡。
+          </p>
+          <div class="grid grid-2">
+            <div class="form-group">
+              <label class="form-label">设备品牌</label>
+              <input v-model="supplementData.device_brand" class="form-input" placeholder="例如：华为" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">系统版本</label>
+              <input v-model="supplementData.system_version" class="form-input" placeholder="例如：HarmonyOS 4" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">新增困难标签（逗号分隔）</label>
+              <input v-model="supplementData.difficulty_tags" class="form-input" placeholder="例如：找不到入口,看不清字" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">新增常用App（逗号分隔）</label>
+              <input v-model="supplementData.common_apps" class="form-input" placeholder="例如：微信,抖音" />
+            </div>
+            <div class="form-group" style="grid-column: span 2">
+              <label class="form-label">网络环境</label>
+              <input v-model="supplementData.network_environment" class="form-input" placeholder="例如：WiFi" />
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showDeviceSupplementModal = false">取消</button>
+          <button class="btn btn-primary" @click="submitSupplement">确认补充</button>
         </div>
       </div>
     </div>
@@ -920,5 +1054,58 @@ onMounted(fetchAll)
 
 .text-orange {
   color: #ea580c;
+}
+
+.device-profile-section {
+  margin-top: 16px;
+  padding: 16px;
+  background: #f0f9ff;
+  border-radius: 12px;
+  border: 1px solid #bae6fd;
+}
+
+.device-profile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.device-profile-header .detail-subtitle {
+  margin-bottom: 0;
+}
+
+.device-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.device-profile-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  background: white;
+  border-radius: 8px;
+}
+
+.dp-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.dp-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.device-profile-tags {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 </style>

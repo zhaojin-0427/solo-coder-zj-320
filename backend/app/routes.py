@@ -1,13 +1,14 @@
 from flask import Blueprint, request, jsonify
 from datetime import datetime
 from app import db
-from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback
+from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback, DeviceProfile, StepCardDeviceTip
 
 help_bp = Blueprint('help', __name__)
 stepcard_bp = Blueprint('stepcard', __name__)
 stats_bp = Blueprint('stats', __name__)
 user_bp = Blueprint('user', __name__)
 practice_bp = Blueprint('practice', __name__)
+device_bp = Blueprint('device', __name__)
 
 def serialize_user(u):
     return {'id': u.id, 'name': u.name, 'role': u.role, 'avatar': u.avatar, 'phone': u.phone}
@@ -21,6 +22,8 @@ def serialize_help(h):
         'requester': serialize_user(h.requester) if h.requester else None,
         'helper': serialize_user(h.helper) if h.helper else None,
         'helper_id': h.helper_id, 'step_card_id': h.step_card_id,
+        'device_profile_id': h.device_profile_id,
+        'device_profile': serialize_device_profile(h.device_profile) if h.device_profile else None,
         'created_at': h.created_at.isoformat() if h.created_at else None,
         'resolved_at': h.resolved_at.isoformat() if h.resolved_at else None,
         'resolution_duration': h.resolution_duration,
@@ -44,7 +47,8 @@ def serialize_stepcard(s):
         'usage_count': s.usage_count, 'created_by': s.created_by,
         'created_at': s.created_at.isoformat() if s.created_at else None,
         'updated_at': s.updated_at.isoformat() if s.updated_at else None,
-        'steps': [serialize_step(st) for st in s.steps]
+        'steps': [serialize_step(st) for st in s.steps],
+        'device_tips': [serialize_device_tip(dt) for dt in s.device_tips]
     }
 
 def serialize_step(st):
@@ -85,6 +89,28 @@ def serialize_practice_record(pr):
         'completed_at': pr.completed_at.isoformat() if pr.completed_at else None
     }
 
+def serialize_device_profile(dp):
+    return {
+        'id': dp.id, 'user_id': dp.user_id,
+        'device_brand': dp.device_brand, 'system_version': dp.system_version,
+        'font_size_preference': dp.font_size_preference,
+        'simple_mode_enabled': dp.simple_mode_enabled,
+        'common_apps': dp.common_apps,
+        'network_environment': dp.network_environment,
+        'difficulty_tags': dp.difficulty_tags,
+        'updated_at': dp.updated_at.isoformat() if dp.updated_at else None,
+        'user': serialize_user(dp.user) if dp.user else None
+    }
+
+def serialize_device_tip(dt):
+    return {
+        'id': dt.id, 'step_card_id': dt.step_card_id,
+        'step_number': dt.step_number, 'device_brand': dt.device_brand,
+        'system_version': dt.system_version,
+        'adaptation_tip': dt.adaptation_tip,
+        'entry_name': dt.entry_name
+    }
+
 @user_bp.route('/', methods=['GET'])
 def list_users():
     users = User.query.all()
@@ -115,10 +141,22 @@ def create_help():
         audio_url=data.get('audio_url'),
         device_brand=data.get('device_brand'),
         system_version=data.get('system_version'),
-        requester_id=data.get('requester_id', 1)
+        requester_id=data.get('requester_id', 1),
+        device_profile_id=data.get('device_profile_id')
     )
-    existing = StepCard.query.filter_by(problem_type=h.problem_type).first()
-    if existing:
+    existing = StepCard.query.filter_by(problem_type=h.problem_type)
+    if h.device_brand:
+        brand_cards = existing.filter(
+            db.or_(StepCard.device_brand == h.device_brand, StepCard.device_brand == None)
+        ).all()
+        if brand_cards:
+            existing = StepCard.query.filter_by(problem_type=h.problem_type).filter(
+                db.or_(StepCard.device_brand == h.device_brand, StepCard.device_brand == None)
+            )
+        else:
+            existing = StepCard.query.filter_by(problem_type=h.problem_type)
+    first = existing.first()
+    if first:
         h.is_repeat = True
     db.session.add(h)
     db.session.commit()
@@ -156,9 +194,14 @@ def resolve_help(id):
 @stepcard_bp.route('/', methods=['GET'])
 def list_stepcards():
     problem_type = request.args.get('problem_type')
+    device_brand = request.args.get('device_brand')
     query = StepCard.query.order_by(StepCard.usage_count.desc())
     if problem_type:
         query = query.filter_by(problem_type=problem_type)
+    if device_brand:
+        query = query.filter(
+            db.or_(StepCard.device_brand == device_brand, StepCard.device_brand == None)
+        )
     cards = query.all()
     return jsonify([serialize_stepcard(s) for s in cards])
 
@@ -492,3 +535,210 @@ def add_step_tip(id):
 
     db.session.commit()
     return jsonify(serialize_step(step))
+
+@device_bp.route('/profiles', methods=['GET'])
+def list_device_profiles():
+    profiles = DeviceProfile.query.all()
+    return jsonify([serialize_device_profile(p) for p in profiles])
+
+@device_bp.route('/profiles/<int:id>', methods=['GET'])
+def get_device_profile(id):
+    p = DeviceProfile.query.get_or_404(id)
+    return jsonify(serialize_device_profile(p))
+
+@device_bp.route('/profiles', methods=['POST'])
+def create_device_profile():
+    data = request.json
+    existing = DeviceProfile.query.filter_by(user_id=data['user_id']).first()
+    if existing:
+        return jsonify({'error': '该用户已有设备档案，请使用 PUT 更新'}), 400
+    p = DeviceProfile(
+        user_id=data['user_id'],
+        device_brand=data.get('device_brand'),
+        system_version=data.get('system_version'),
+        font_size_preference=data.get('font_size_preference'),
+        simple_mode_enabled=data.get('simple_mode_enabled', False),
+        common_apps=data.get('common_apps'),
+        network_environment=data.get('network_environment'),
+        difficulty_tags=data.get('difficulty_tags')
+    )
+    db.session.add(p)
+    db.session.commit()
+    return jsonify(serialize_device_profile(p)), 201
+
+@device_bp.route('/profiles/<int:id>', methods=['PUT'])
+def update_device_profile(id):
+    p = DeviceProfile.query.get_or_404(id)
+    data = request.json
+    if 'device_brand' in data:
+        p.device_brand = data['device_brand']
+    if 'system_version' in data:
+        p.system_version = data['system_version']
+    if 'font_size_preference' in data:
+        p.font_size_preference = data['font_size_preference']
+    if 'simple_mode_enabled' in data:
+        p.simple_mode_enabled = data['simple_mode_enabled']
+    if 'common_apps' in data:
+        p.common_apps = data['common_apps']
+    if 'network_environment' in data:
+        p.network_environment = data['network_environment']
+    if 'difficulty_tags' in data:
+        p.difficulty_tags = data['difficulty_tags']
+    p.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(serialize_device_profile(p))
+
+@device_bp.route('/profiles/user/<int:user_id>', methods=['GET'])
+def get_profile_by_user(user_id):
+    p = DeviceProfile.query.filter_by(user_id=user_id).first()
+    if not p:
+        return jsonify(None)
+    return jsonify(serialize_device_profile(p))
+
+@device_bp.route('/profiles/<int:id>/supplement', methods=['POST'])
+def supplement_device_profile(id):
+    p = DeviceProfile.query.get_or_404(id)
+    data = request.json
+    if data.get('difficulty_tags'):
+        existing_tags = set((p.difficulty_tags or '').split(',')) if p.difficulty_tags else set()
+        new_tags = set(data['difficulty_tags'].split(','))
+        p.difficulty_tags = ','.join(existing_tags | new_tags).strip(',')
+    if data.get('common_apps'):
+        existing_apps = set((p.common_apps or '').split(',')) if p.common_apps else set()
+        new_apps = set(data['common_apps'].split(','))
+        p.common_apps = ','.join(existing_apps | new_apps).strip(',')
+    if data.get('device_brand'):
+        p.device_brand = data['device_brand']
+    if data.get('system_version'):
+        p.system_version = data['system_version']
+    if data.get('font_size_preference'):
+        p.font_size_preference = data['font_size_preference']
+    if 'simple_mode_enabled' in data:
+        p.simple_mode_enabled = data['simple_mode_enabled']
+    if data.get('network_environment'):
+        p.network_environment = data['network_environment']
+    p.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(serialize_device_profile(p))
+
+@stepcard_bp.route('/<int:id>/device_tips', methods=['GET'])
+def list_device_tips(id):
+    s = StepCard.query.get_or_404(id)
+    return jsonify([serialize_device_tip(dt) for dt in s.device_tips])
+
+@stepcard_bp.route('/<int:id>/device_tips', methods=['POST'])
+def add_device_tip(id):
+    s = StepCard.query.get_or_404(id)
+    data = request.json
+    dt = StepCardDeviceTip(
+        step_card_id=id,
+        step_number=data['step_number'],
+        device_brand=data['device_brand'],
+        system_version=data.get('system_version'),
+        adaptation_tip=data['adaptation_tip'],
+        entry_name=data.get('entry_name')
+    )
+    db.session.add(dt)
+    db.session.commit()
+    return jsonify(serialize_device_tip(dt)), 201
+
+@stepcard_bp.route('/<int:id>/device_tips/<int:tip_id>', methods=['PUT'])
+def update_device_tip(id, tip_id):
+    dt = StepCardDeviceTip.query.get_or_404(tip_id)
+    if dt.step_card_id != id:
+        return jsonify({'error': 'Tip does not belong to this step card'}), 400
+    data = request.json
+    if 'step_number' in data:
+        dt.step_number = data['step_number']
+    if 'device_brand' in data:
+        dt.device_brand = data['device_brand']
+    if 'system_version' in data:
+        dt.system_version = data['system_version']
+    if 'adaptation_tip' in data:
+        dt.adaptation_tip = data['adaptation_tip']
+    if 'entry_name' in data:
+        dt.entry_name = data['entry_name']
+    db.session.commit()
+    return jsonify(serialize_device_tip(dt))
+
+@stepcard_bp.route('/<int:id>/device_tips/<int:tip_id>', methods=['DELETE'])
+def delete_device_tip(id, tip_id):
+    dt = StepCardDeviceTip.query.get_or_404(tip_id)
+    if dt.step_card_id != id:
+        return jsonify({'error': 'Tip does not belong to this step card'}), 400
+    db.session.delete(dt)
+    db.session.commit()
+    return jsonify({'success': True})
+
+@stepcard_bp.route('/<int:id>/adaptation', methods=['GET'])
+def get_step_adaptation(id):
+    s = StepCard.query.get_or_404(id)
+    device_brand = request.args.get('device_brand')
+    system_version = request.args.get('system_version')
+    tips = s.device_tips
+    if device_brand:
+        tips = [t for t in tips if t.device_brand == device_brand]
+    if system_version:
+        tips = [t for t in tips if t.system_version == system_version or t.system_version is None]
+    steps_with_tips = []
+    for step in sorted(s.steps, key=lambda x: x.step_number):
+        step_tips = [t for t in tips if t.step_number == step.step_number]
+        steps_with_tips.append({
+            'step': serialize_step(step),
+            'adaptation_tips': [serialize_device_tip(t) for t in step_tips]
+        })
+    return jsonify(steps_with_tips)
+
+@stats_bp.route('/device', methods=['GET'])
+def stats_device():
+    from sqlalchemy import func, desc
+
+    brand_stats = db.session.query(
+        HelpRequest.device_brand,
+        func.count(HelpRequest.id).label('count')
+    ).filter(
+        HelpRequest.device_brand != None
+    ).group_by(HelpRequest.device_brand).all()
+
+    system_stats = db.session.query(
+        HelpRequest.system_version,
+        func.count(HelpRequest.id).label('count')
+    ).group_by(HelpRequest.system_version).all()
+
+    brand_duration = db.session.query(
+        HelpRequest.device_brand,
+        func.avg(HelpRequest.resolution_duration).label('avg_duration')
+    ).filter(
+        HelpRequest.device_brand != None,
+        HelpRequest.status == 'resolved',
+        HelpRequest.resolution_duration != None
+    ).group_by(HelpRequest.device_brand).all()
+
+    brand_problem = db.session.query(
+        HelpRequest.device_brand,
+        HelpRequest.problem_type,
+        func.count(HelpRequest.id).label('count')
+    ).filter(
+        HelpRequest.device_brand != None
+    ).group_by(HelpRequest.device_brand, HelpRequest.problem_type).all()
+
+    profiles = DeviceProfile.query.all()
+    difficulty_tag_counts = {}
+    for p in profiles:
+        if p.difficulty_tags:
+            tags = [t.strip() for t in p.difficulty_tags.split(',') if t.strip()]
+            for tag in tags:
+                difficulty_tag_counts[tag] = difficulty_tag_counts.get(tag, 0) + 1
+
+    sorted_tags = sorted(difficulty_tag_counts.items(), key=lambda x: x[1], reverse=True)
+
+    return jsonify({
+        'brand_distribution': [{'brand': b or '未知', 'count': c} for b, c in brand_stats],
+        'system_distribution': [{'system': s or '未知', 'count': c} for s, c in system_stats],
+        'brand_avg_duration': [{'brand': b, 'avg_duration': round(d, 1)} for b, d in brand_duration],
+        'brand_problem_distribution': [
+            {'brand': b, 'problem_type': pt, 'count': c}
+            for b, pt, c in brand_problem
+        ],
+        'top_difficulty_tags': [{'tag': t, 'count': c} for t, c in sorted_tags[:10]]
+    })

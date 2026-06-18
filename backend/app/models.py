@@ -28,11 +28,13 @@ class HelpRequest(db.Model):
     resolution_duration = db.Column(db.Integer)
     is_independent = db.Column(db.Boolean, default=False)
     is_repeat = db.Column(db.Boolean, default=False)
-    
+    device_profile_id = db.Column(db.Integer, db.ForeignKey('device_profiles.id'))
+
     requester = db.relationship('User', foreign_keys=[requester_id])
     helper = db.relationship('User', foreign_keys=[helper_id])
     guidance_records = db.relationship('GuidanceRecord', backref='help_request', cascade='all, delete-orphan')
     step_card_id = db.Column(db.Integer, db.ForeignKey('step_cards.id'))
+    device_profile = db.relationship('DeviceProfile', backref='help_requests')
 
 class GuidanceRecord(db.Model):
     __tablename__ = 'guidance_records'
@@ -89,6 +91,33 @@ class PracticeRecord(db.Model):
     practitioner = db.relationship('User', foreign_keys=[practitioner_id])
     help_request = db.relationship('HelpRequest', foreign_keys=[help_request_id])
     step_feedbacks = db.relationship('PracticeStepFeedback', backref='practice_record', cascade='all, delete-orphan')
+
+class StepCardDeviceTip(db.Model):
+    __tablename__ = 'step_card_device_tips'
+    id = db.Column(db.Integer, primary_key=True)
+    step_card_id = db.Column(db.Integer, db.ForeignKey('step_cards.id'), nullable=False)
+    step_number = db.Column(db.Integer, nullable=False)
+    device_brand = db.Column(db.String(50), nullable=False)
+    system_version = db.Column(db.String(50))
+    adaptation_tip = db.Column(db.Text, nullable=False)
+    entry_name = db.Column(db.String(100))
+
+    step_card = db.relationship('StepCard', backref='device_tips')
+
+class DeviceProfile(db.Model):
+    __tablename__ = 'device_profiles'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
+    device_brand = db.Column(db.String(50))
+    system_version = db.Column(db.String(50))
+    font_size_preference = db.Column(db.String(20))
+    simple_mode_enabled = db.Column(db.Boolean, default=False)
+    common_apps = db.Column(db.Text)
+    network_environment = db.Column(db.String(50))
+    difficulty_tags = db.Column(db.Text)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref='device_profile')
 
 class PracticeStepFeedback(db.Model):
     __tablename__ = 'practice_step_feedbacks'

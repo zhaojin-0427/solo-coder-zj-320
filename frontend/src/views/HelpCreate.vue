@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { ref, watch, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { helpApi, stepcardApi } from '@/api'
-import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard } from '@/types'
+import { helpApi, stepcardApi, deviceApi } from '@/api'
+import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard, type DeviceProfile } from '@/types'
 
 const router = useRouter()
 
@@ -17,6 +17,20 @@ const submitting = ref(false)
 const submitted = ref(false)
 const suggestedCards = ref<StepCard[]>([])
 const isLoadingSuggestions = ref(false)
+const deviceProfile = ref<DeviceProfile | null>(null)
+
+const loadDeviceProfile = async () => {
+  try {
+    const profile = await deviceApi.getProfileByUser(1)
+    if (profile) {
+      deviceProfile.value = profile
+      deviceBrand.value = profile.device_brand || ''
+      systemVersion.value = profile.system_version || ''
+    }
+  } catch (e) {
+    console.error(e)
+  }
+}
 
 const quickOptions: { type: string; icon: string; desc: string }[] = [
   { type: '看不清字', icon: '🔍', desc: '字体太小，看不清屏幕' },
@@ -45,7 +59,11 @@ watch(problemType, (val) => {
 const fetchSuggestions = async (type: string) => {
   isLoadingSuggestions.value = true
   try {
-    suggestedCards.value = await stepcardApi.list(type)
+    const params: { problem_type: string; device_brand?: string } = { problem_type: type }
+    if (deviceBrand.value) {
+      params.device_brand = deviceBrand.value
+    }
+    suggestedCards.value = await stepcardApi.list(params)
   } catch (e) {
     console.error(e)
     suggestedCards.value = []
@@ -152,7 +170,8 @@ const submitHelp = async () => {
       device_brand: deviceBrand.value,
       system_version: systemVersion.value,
       image_url: imageUrl.value,
-      audio_url: audioUrl.value || undefined
+      audio_url: audioUrl.value || undefined,
+      device_profile_id: deviceProfile.value?.id
     })
     submitted.value = true
   } catch (e) {
@@ -174,12 +193,25 @@ const resetForm = () => {
   problemType.value = ''
   title.value = ''
   description.value = ''
-  deviceBrand.value = ''
-  systemVersion.value = ''
+  if (deviceProfile.value) {
+    deviceBrand.value = deviceProfile.value.device_brand || ''
+    systemVersion.value = deviceProfile.value.system_version || ''
+  } else {
+    deviceBrand.value = ''
+    systemVersion.value = ''
+  }
   submitted.value = false
   suggestedCards.value = []
   isLoadingSuggestions.value = false
 }
+
+watch(deviceBrand, () => {
+  if (problemType.value) {
+    fetchSuggestions(problemType.value)
+  }
+})
+
+onMounted(loadDeviceProfile)
 </script>
 
 <template>
@@ -194,6 +226,20 @@ const resetForm = () => {
   </div>
 
   <div v-else>
+    <div v-if="deviceProfile" class="card mb-6 device-profile-banner">
+      <div class="profile-banner-content">
+        <div class="profile-banner-icon">📱</div>
+        <div class="profile-banner-info">
+          <div class="profile-banner-title">设备档案已自动加载</div>
+          <div class="profile-banner-detail">
+            {{ deviceProfile.device_brand || '未设置' }} · {{ deviceProfile.system_version || '未设置' }}
+            <span v-if="deviceProfile.font_size_preference"> · 字体{{ deviceProfile.font_size_preference }}</span>
+            <span v-if="deviceProfile.simple_mode_enabled"> · 简易模式</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="card mb-6">
       <h3 class="section-title">🎯 常见问题快速选择</h3>
       <p class="text-muted mb-4">请点击最接近您遇到的问题，系统会自动匹配历史解决方案</p>
@@ -239,6 +285,9 @@ const resetForm = () => {
             <span v-if="card.device_brand">{{ card.device_brand }}</span>
             <span v-if="card.system_version"> · {{ card.system_version }}</span>
             <span> · 已使用 {{ card.usage_count }} 次</span>
+          </div>
+          <div v-if="card.device_tips && card.device_tips.length > 0 && deviceBrand" class="suggestion-adapt">
+            📱 含{{ deviceBrand }}适配提示
           </div>
           <div class="suggestion-steps">共 {{ card.steps.length }} 个操作步骤</div>
         </div>
@@ -351,6 +400,33 @@ const resetForm = () => {
 </template>
 
 <style scoped>
+.device-profile-banner {
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  border-left: 4px solid #0284c7;
+}
+
+.profile-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.profile-banner-icon {
+  font-size: 40px;
+}
+
+.profile-banner-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0c4a6e;
+  margin-bottom: 2px;
+}
+
+.profile-banner-detail {
+  font-size: 14px;
+  color: #0369a1;
+}
+
 .quick-card {
   background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
   border: 3px solid transparent;
@@ -426,6 +502,17 @@ const resetForm = () => {
   font-size: 13px;
   color: #667eea;
   font-weight: 500;
+}
+
+.suggestion-adapt {
+  margin-top: 6px;
+  padding: 4px 10px;
+  background: #e0f2fe;
+  color: #0369a1;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-block;
 }
 
 .upload-area {

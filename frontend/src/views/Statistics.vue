@@ -12,7 +12,7 @@ import {
 } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { statsApi, helpApi } from '@/api'
-import type { StatsOverview, HelpRequest } from '@/types'
+import type { StatsOverview, HelpRequest, DeviceStats } from '@/types'
 
 use([
   CanvasRenderer,
@@ -33,6 +33,7 @@ const overview = ref<StatsOverview | null>(null)
 const recentHelps = ref<HelpRequest[]>([])
 const timeline = ref<{ date: string; count: number }[]>([])
 const practiceStats = ref<PracticeStats | null>(null)
+const deviceStats = ref<DeviceStats | null>(null)
 
 const typeColors = {
   '看不清字': '#667eea',
@@ -238,11 +239,119 @@ const timelineOption = computed(() => {
   }
 })
 
+const brandDistributionOption = computed(() => {
+  const data = deviceStats.value?.brand_distribution || []
+  const brandColors = ['#667eea', '#f5576c', '#f59e0b', '#11998e', '#8b5cf6', '#ec4899', '#06b6d4']
+  return {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} 次 ({d}%)' },
+    legend: {
+      bottom: 0,
+      left: 'center',
+      textStyle: { fontSize: 12 }
+    },
+    series: [{
+      type: 'pie',
+      radius: ['40%', '68%'],
+      center: ['50%', '42%'],
+      avoidLabelOverlap: true,
+      itemStyle: {
+        borderRadius: 8,
+        borderColor: '#fff',
+        borderWidth: 2
+      },
+      label: {
+        show: true,
+        formatter: '{b}\n{d}%',
+        fontSize: 12
+      },
+      data: data.map((item, idx) => ({
+        value: item.count,
+        name: item.brand,
+        itemStyle: { color: brandColors[idx % brandColors.length] }
+      }))
+    }]
+  }
+})
+
+const brandDurationOption = computed(() => {
+  const data = deviceStats.value?.brand_avg_duration || []
+  return {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 60, right: 20, top: 30, bottom: 40 },
+    xAxis: {
+      type: 'category',
+      data: data.map(d => d.brand),
+      axisLabel: { fontSize: 12 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '分钟',
+      nameTextStyle: { fontSize: 12, color: '#64748b' },
+      axisLabel: { fontSize: 11 },
+      splitLine: { lineStyle: { color: '#f1f5f9' } }
+    },
+    series: [{
+      type: 'bar',
+      data: data.map(d => d.avg_duration),
+      barWidth: 36,
+      itemStyle: {
+        borderRadius: [6, 6, 0, 0],
+        color: {
+          type: 'linear',
+          x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: '#667eea' },
+            { offset: 1, color: '#764ba2' }
+          ]
+        }
+      }
+    }]
+  }
+})
+
+const brandProblemOption = computed(() => {
+  const data = deviceStats.value?.brand_problem_distribution || []
+  if (data.length === 0) return {}
+  const brands = [...new Set(data.map(d => d.brand))]
+  const types = [...new Set(data.map(d => d.problem_type))]
+  const typeColorList = ['#667eea', '#11998e', '#f5576c', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#94a3b8']
+  return {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: {
+      bottom: 0,
+      textStyle: { fontSize: 11 }
+    },
+    grid: { left: 60, right: 20, top: 30, bottom: 60 },
+    xAxis: {
+      type: 'category',
+      data: brands,
+      axisLabel: { fontSize: 12 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '次数',
+      nameTextStyle: { fontSize: 12, color: '#64748b' },
+      splitLine: { lineStyle: { color: '#f1f5f9' } }
+    },
+    series: types.map((type, idx) => ({
+      name: type,
+      type: 'bar',
+      stack: 'total',
+      data: brands.map(b => {
+        const found = data.find(d => d.brand === b && d.problem_type === type)
+        return found ? found.count : 0
+      }),
+      itemStyle: { color: typeColorList[idx % typeColorList.length] }
+    }))
+  }
+})
+
 const fetchData = async () => {
   overview.value = await statsApi.overview()
   recentHelps.value = (await helpApi.list()).slice(0, 6)
   timeline.value = await statsApi.timeline()
   practiceStats.value = await statsApi.practice()
+  deviceStats.value = await statsApi.device()
 }
 
 const formatTime = (t?: string) => {
@@ -471,6 +580,116 @@ onMounted(fetchData)
         <div v-if="!practiceStats?.top_practiced_cards?.length" class="empty-state" style="padding: 30px;">
           <div class="empty-state-icon">🏆</div>
           <div>暂无练习数据</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="device-stats-section mt-6">
+      <h3 class="section-title mb-4">📱 设备维度分析</h3>
+      <div class="grid grid-3">
+        <div class="card">
+          <h3 class="section-title mb-4">📊 品牌求助分布</h3>
+          <VChart v-if="deviceStats?.brand_distribution?.length" :option="brandDistributionOption" style="height: 320px" autoresize />
+          <div v-else class="empty-state" style="padding: 40px;">
+            <div class="empty-state-icon">📊</div>
+            <div>暂无品牌数据</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title mb-4">⏱️ 品牌平均解决时长</h3>
+          <VChart v-if="deviceStats?.brand_avg_duration?.length" :option="brandDurationOption" style="height: 320px" autoresize />
+          <div v-else class="empty-state" style="padding: 40px;">
+            <div class="empty-state-icon">⏱️</div>
+            <div>暂无解决时长数据</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title mb-4">🏷️ 高频困难标签</h3>
+          <div class="difficulty-tags-list">
+            <div
+              v-for="(item, index) in deviceStats?.top_difficulty_tags || []"
+              :key="index"
+              class="difficulty-tag-item"
+            >
+              <div :class="['difficulty-tag-rank', { 'rank-1': index === 0, 'rank-2': index === 1, 'rank-3': index === 2 }]">
+                {{ index + 1 }}
+              </div>
+              <div class="difficulty-tag-name">{{ item.tag }}</div>
+              <div class="difficulty-tag-count">
+                <span class="count-num">{{ item.count }}</span>
+                <span class="count-label">人</span>
+              </div>
+            </div>
+            <div v-if="!deviceStats?.top_difficulty_tags?.length" class="empty-state" style="padding: 40px;">
+              <div class="empty-state-icon">🏷️</div>
+              <div>暂无困难标签数据</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mt-6">
+        <h3 class="section-title mb-4">📱 品牌问题类型分布</h3>
+        <VChart v-if="deviceStats?.brand_problem_distribution?.length" :option="brandProblemOption" style="height: 380px" autoresize />
+        <div v-else class="empty-state" style="padding: 40px;">
+          <div class="empty-state-icon">📱</div>
+          <div>暂无品牌问题分布数据</div>
+        </div>
+      </div>
+
+      <div class="grid grid-2 mt-6">
+        <div class="card">
+          <h3 class="section-title mb-4">💻 系统版本分布</h3>
+          <div class="system-list">
+            <div
+              v-for="item in deviceStats?.system_distribution || []"
+              :key="item.system"
+              class="system-item"
+            >
+              <div class="system-name">{{ item.system || '未知' }}</div>
+              <div class="system-bar-wrap">
+                <div
+                  class="system-bar"
+                  :style="{ width: deviceStats && deviceStats.system_distribution.length > 0
+                    ? (item.count / Math.max(...deviceStats.system_distribution.map(s => s.count)) * 100) + '%'
+                    : '0%' }"
+                ></div>
+              </div>
+              <div class="system-count">{{ item.count }} 次</div>
+            </div>
+            <div v-if="!deviceStats?.system_distribution?.length" class="empty-state" style="padding: 30px;">
+              <div class="empty-state-icon">💻</div>
+              <div>暂无系统版本数据</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title mb-4">📋 品牌解决时长对比</h3>
+          <div class="brand-duration-list">
+            <div
+              v-for="item in deviceStats?.brand_avg_duration || []"
+              :key="item.brand"
+              class="brand-duration-item"
+            >
+              <div class="brand-duration-name">{{ item.brand }}</div>
+              <div class="brand-duration-bar-wrap">
+                <div
+                  class="brand-duration-bar"
+                  :style="{ width: deviceStats && deviceStats.brand_avg_duration.length > 0
+                    ? (item.avg_duration / Math.max(...deviceStats.brand_avg_duration.map(b => b.avg_duration)) * 100) + '%'
+                    : '0%' }"
+                ></div>
+              </div>
+              <div class="brand-duration-value">{{ item.avg_duration }} 分钟</div>
+            </div>
+            <div v-if="!deviceStats?.brand_avg_duration?.length" class="empty-state" style="padding: 30px;">
+              <div class="empty-state-icon">📋</div>
+              <div>暂无解决时长数据</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -889,5 +1108,173 @@ onMounted(fetchData)
 
 .text-green {
   color: #16a34a;
+}
+
+.device-stats-section {
+  margin-top: 24px;
+}
+
+.difficulty-tags-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.difficulty-tag-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border-radius: 12px;
+  transition: all 0.2s;
+}
+
+.difficulty-tag-item:hover {
+  background: #f1f5f9;
+  transform: translateX(4px);
+}
+
+.difficulty-tag-rank {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  background: #e2e8f0;
+  color: #64748b;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.difficulty-tag-rank.rank-1 {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #92400e;
+}
+
+.difficulty-tag-rank.rank-2 {
+  background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+  color: #4338ca;
+}
+
+.difficulty-tag-rank.rank-3 {
+  background: linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%);
+  color: #be185d;
+}
+
+.difficulty-tag-name {
+  flex: 1;
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 15px;
+}
+
+.difficulty-tag-count {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.difficulty-tag-count .count-num {
+  font-size: 20px;
+  font-weight: 800;
+  color: #f59e0b;
+}
+
+.difficulty-tag-count .count-label {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-left: 2px;
+}
+
+.system-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.system-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.system-name {
+  width: 120px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  flex-shrink: 0;
+}
+
+.system-bar-wrap {
+  flex: 1;
+  height: 24px;
+  background: #f1f5f9;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.system-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  transition: width 0.3s;
+  min-width: 4px;
+}
+
+.system-count {
+  width: 60px;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 700;
+  color: #475569;
+  flex-shrink: 0;
+}
+
+.brand-duration-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.brand-duration-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-duration-name {
+  width: 60px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  flex-shrink: 0;
+}
+
+.brand-duration-bar-wrap {
+  flex: 1;
+  height: 24px;
+  background: #f1f5f9;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.brand-duration-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #11998e 0%, #38ef7d 100%);
+  border-radius: 12px;
+  transition: width 0.3s;
+  min-width: 4px;
+}
+
+.brand-duration-value {
+  width: 80px;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 700;
+  color: #475569;
+  flex-shrink: 0;
 }
 </style>

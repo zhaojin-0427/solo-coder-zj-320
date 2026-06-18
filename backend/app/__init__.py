@@ -16,12 +16,13 @@ def create_app():
     
     db.init_app(app)
     
-    from app.routes import help_bp, stepcard_bp, stats_bp, user_bp, practice_bp
+    from app.routes import help_bp, stepcard_bp, stats_bp, user_bp, practice_bp, device_bp
     app.register_blueprint(help_bp, url_prefix='/api/help')
     app.register_blueprint(stepcard_bp, url_prefix='/api/stepcard')
     app.register_blueprint(stats_bp, url_prefix='/api/stats')
     app.register_blueprint(user_bp, url_prefix='/api/user')
     app.register_blueprint(practice_bp, url_prefix='/api/practice')
+    app.register_blueprint(device_bp, url_prefix='/api/device')
     
     with app.app_context():
         db.create_all()
