@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { stepcardApi } from '@/api'
 import { PROBLEM_TYPES, type StepCard } from '@/types'
+
+const route = useRoute()
+const router = useRouter()
 
 const cards = ref<StepCard[]>([])
 const searchQuery = ref('')
 const selectedType = ref<string>('')
 const viewingCard = ref<StepCard | null>(null)
+const cardsLoaded = ref(false)
 
 const filteredCards = computed(() => {
   let list = cards.value
@@ -38,6 +43,23 @@ const typeIcons: Record<string, string> = {
 
 const fetchCards = async () => {
   cards.value = await stepcardApi.list()
+  cardsLoaded.value = true
+  const cardId = route.params.cardId
+  if (cardId) {
+    openCardById(Number(cardId))
+  }
+}
+
+const openCardById = async (id: number) => {
+  try {
+    const detail = await stepcardApi.get(id)
+    viewingCard.value = detail
+    stepcardApi.use(id)
+    const card = cards.value.find((c) => c.id === id)
+    if (card) card.usage_count++
+  } catch (e) {
+    console.error('Failed to open card:', e)
+  }
 }
 
 const openCard = async (card: StepCard) => {
@@ -45,10 +67,12 @@ const openCard = async (card: StepCard) => {
   viewingCard.value = detail
   stepcardApi.use(card.id)
   card.usage_count++
+  router.push(`/library/${card.id}`)
 }
 
 const closeCard = () => {
   viewingCard.value = null
+  router.push('/library')
 }
 
 const difficultyLabel = (d: string) => {
@@ -173,8 +197,14 @@ onMounted(fetchCards)
           </div>
 
           <div class="detail-steps">
-            <h4>📋 操作步骤（共 {{ viewingCard.steps.length }} 步）</h4>
+            <h4 v-if="viewingCard.steps.length > 0">📋 操作步骤（共 {{ viewingCard.steps.length }} 步）</h4>
+            <div v-if="viewingCard.steps.length === 0" class="empty-steps">
+              <div class="empty-steps-icon">⚠️</div>
+              <div class="empty-steps-text">该方案暂无操作步骤</div>
+              <div class="empty-steps-hint">请前往「步骤卡整理」页面补充完善</div>
+            </div>
             <div
+              v-else
               v-for="step in [...viewingCard.steps].sort((a, b) => a.step_number - b.step_number)"
               :key="step.id"
               class="step-item large-step"
@@ -473,6 +503,31 @@ onMounted(fetchCards)
   border-radius: 10px;
   color: #166534;
   text-align: center;
+}
+
+.empty-steps {
+  text-align: center;
+  padding: 40px 20px;
+  background: #fef3c7;
+  border-radius: 12px;
+  border: 2px dashed #f59e0b;
+}
+
+.empty-steps-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.empty-steps-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: #92400e;
+  margin-bottom: 6px;
+}
+
+.empty-steps-hint {
+  font-size: 14px;
+  color: #b45309;
 }
 
 .modal-footer {

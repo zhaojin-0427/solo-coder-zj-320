@@ -165,7 +165,7 @@ const submitHelp = async () => {
 
 const openCard = (id: number) => {
   stepcardApi.use(id)
-  router.push('/library')
+  router.push(`/library/${id}`)
 }
 
 const resetForm = () => {

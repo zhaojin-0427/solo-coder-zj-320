@@ -30,6 +30,12 @@ const routes = [
     meta: { title: '高频问题库', icon: '📚' }
   },
   {
+    path: '/library/:cardId',
+    name: 'LibraryDetail',
+    component: () => import('@/views/ProblemLibrary.vue'),
+    meta: { title: '高频问题库', icon: '📚' }
+  },
+  {
     path: '/stats',
     name: 'Stats',
     component: () => import('@/views/Statistics.vue'),

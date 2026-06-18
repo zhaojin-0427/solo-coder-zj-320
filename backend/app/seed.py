@@ -65,7 +65,8 @@ def seed_data():
             resolved_at=created + timedelta(minutes=10 + i * 3) if i < 9 else None,
             resolution_duration=10 + i * 3 if i < 9 else None,
             is_independent=[True, False, False, True, False, True, False, True, False][i % 9] if i < 9 else False,
-            is_repeat=i in [5, 6, 7, 8, 9, 10]
+            is_repeat=i in [5, 6, 7, 8, 9, 10],
+            audio_url='https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3' if i == 0 else None
         )
         helps.append(h)
     db.session.add_all(helps)

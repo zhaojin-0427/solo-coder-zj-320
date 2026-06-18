@@ -142,6 +142,13 @@ onMounted(fetchHelps)
           <div v-if="selectedHelp.image_url" class="screenshot-preview">
             <img :src="selectedHelp.image_url" alt="问题截图" />
           </div>
+          <div v-if="selectedHelp.audio_url" class="audio-preview">
+            <div class="audio-info">
+              <span class="audio-icon">🎙️</span>
+              <span class="audio-label">语音描述</span>
+            </div>
+            <audio :src="selectedHelp.audio_url" controls class="audio-player"></audio>
+          </div>
         </div>
 
         <div class="detail-section">
@@ -404,5 +411,34 @@ onMounted(fetchHelps)
   gap: 32px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+}
+
+.audio-preview {
+  margin-top: 16px;
+  padding: 16px;
+  background: #f0fdf4;
+  border-radius: 12px;
+  border-left: 4px solid #10b981;
+}
+
+.audio-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.audio-icon {
+  font-size: 20px;
+}
+
+.audio-label {
+  font-weight: 600;
+  color: #065f46;
+}
+
+.audio-player {
+  width: 100%;
+  max-width: 360px;
 }
 </style>
