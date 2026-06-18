@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { helpApi, stepcardApi } from '@/api'
 import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard } from '@/types'
@@ -12,9 +12,11 @@ const description = ref('')
 const deviceBrand = ref('')
 const systemVersion = ref('')
 const imageUrl = ref('')
+const imageFile = ref<File | null>(null)
 const submitting = ref(false)
 const submitted = ref(false)
 const suggestedCards = ref<StepCard[]>([])
+const isLoadingSuggestions = ref(false)
 
 const quickOptions: { type: string; icon: string; desc: string }[] = [
   { type: '看不清字', icon: '🔍', desc: '字体太小，看不清屏幕' },
@@ -27,26 +29,114 @@ const quickOptions: { type: string; icon: string; desc: string }[] = [
 
 const selectQuick = (type: string) => {
   problemType.value = type
-  title.value = type + '问题求助'
-  fetchSuggestions(type)
+  if (!title.value) {
+    title.value = type + '问题求助'
+  }
 }
 
-const selectProblemType = (type: string) => {
-  problemType.value = type
-  fetchSuggestions(type)
-}
+watch(problemType, (val) => {
+  if (val) {
+    fetchSuggestions(val)
+  } else {
+    suggestedCards.value = []
+  }
+})
 
 const fetchSuggestions = async (type: string) => {
+  isLoadingSuggestions.value = true
   try {
     suggestedCards.value = await stepcardApi.list(type)
   } catch (e) {
     console.error(e)
+    suggestedCards.value = []
+  } finally {
+    isLoadingSuggestions.value = false
   }
 }
 
-const handleImageUpload = () => {
-  imageUrl.value = 'https://picsum.photos/400/300?random=' + Math.random()
+const handleImageFile = (e: Event) => {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (file) {
+    imageFile.value = file
+    if (imageUrl.value) URL.revokeObjectURL(imageUrl.value)
+    imageUrl.value = URL.createObjectURL(file)
+  }
 }
+
+const removeImage = () => {
+  if (imageUrl.value) URL.revokeObjectURL(imageUrl.value)
+  imageUrl.value = ''
+  imageFile.value = null
+}
+
+const audioUrl = ref('')
+const isRecording = ref(false)
+const recordingSeconds = ref(0)
+let mediaRecorder: MediaRecorder | null = null
+let audioChunks: Blob[] = []
+let timerId: number | null = null
+let stream: MediaStream | null = null
+
+const startRecording = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    audioChunks = []
+    mediaRecorder = new MediaRecorder(stream)
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data)
+    }
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(audioChunks, { type: 'audio/webm' })
+      if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
+      audioUrl.value = URL.createObjectURL(blob)
+    }
+    mediaRecorder.start()
+    isRecording.value = true
+    recordingSeconds.value = 0
+    timerId = window.setInterval(() => {
+      recordingSeconds.value += 1
+      if (recordingSeconds.value >= 60) {
+        stopRecording()
+      }
+    }, 1000)
+  } catch (e) {
+    console.error(e)
+    alert('无法访问麦克风，请检查浏览器权限设置或使用文字描述')
+  }
+}
+
+const stopRecording = () => {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop()
+  }
+  if (stream) {
+    stream.getTracks().forEach((t) => t.stop())
+    stream = null
+  }
+  if (timerId) {
+    clearInterval(timerId)
+    timerId = null
+  }
+  isRecording.value = false
+}
+
+const removeAudio = () => {
+  if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
+  audioUrl.value = ''
+  recordingSeconds.value = 0
+}
+
+const formatDuration = (s: number) => {
+  const m = Math.floor(s / 60)
+  const sec = s % 60
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+}
+
+onBeforeUnmount(() => {
+  if (isRecording.value) stopRecording()
+  if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
+})
 
 const submitHelp = async () => {
   if (!problemType.value || !title.value) {
@@ -61,7 +151,8 @@ const submitHelp = async () => {
       description: description.value,
       device_brand: deviceBrand.value,
       system_version: systemVersion.value,
-      image_url: imageUrl.value
+      image_url: imageUrl.value,
+      audio_url: audioUrl.value || undefined
     })
     submitted.value = true
   } catch (e) {
@@ -78,14 +169,16 @@ const openCard = (id: number) => {
 }
 
 const resetForm = () => {
+  removeAudio()
+  removeImage()
   problemType.value = ''
   title.value = ''
   description.value = ''
   deviceBrand.value = ''
   systemVersion.value = ''
-  imageUrl.value = ''
   submitted.value = false
   suggestedCards.value = []
+  isLoadingSuggestions.value = false
 }
 </script>
 
@@ -119,7 +212,12 @@ const resetForm = () => {
       </div>
     </div>
 
-    <div v-if="suggestedCards.length > 0" class="card mb-6 suggestion-card">
+    <div v-if="isLoadingSuggestions" class="card mb-6 suggestion-card loading-card">
+      <div class="loading-spinner"></div>
+      <p class="loading-text">正在为您匹配历史方案...</p>
+    </div>
+
+    <div v-else-if="suggestedCards.length > 0" class="card mb-6 suggestion-card">
       <div class="suggestion-header">
         <h3 class="section-title mb-2">💡 为您找到 {{ suggestedCards.length }} 个历史方案</h3>
         <p class="text-muted">也许下面的方法可以帮您立即解决问题，无需等待家人回复</p>
@@ -196,13 +294,49 @@ const resetForm = () => {
         <div class="upload-area">
           <div v-if="imageUrl" class="image-preview">
             <img :src="imageUrl" alt="截图预览" />
-            <button class="remove-btn" @click="imageUrl = ''">×</button>
+            <button class="remove-btn" @click="removeImage">×</button>
           </div>
-          <button v-else class="upload-btn" @click="handleImageUpload">
+          <label v-else class="upload-btn">
             <div class="upload-icon">📷</div>
             <div>点击上传屏幕截图</div>
             <div class="text-sm text-muted">支持拍照或从相册选择</div>
-          </button>
+            <input type="file" accept="image/*" class="file-input" @change="handleImageFile" />
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">语音描述（可选）</label>
+        <div class="audio-area">
+          <div v-if="!audioUrl && !isRecording" class="audio-idle">
+            <button class="record-btn" @click="startRecording">
+              <span class="record-icon">🎙️</span>
+              <span>按住说话 / 点击录音</span>
+            </button>
+            <div class="text-sm text-muted mt-2">说不太清楚时，可以直接用语音描述问题</div>
+          </div>
+
+          <div v-else-if="isRecording" class="audio-recording">
+            <div class="recording-indicator">
+              <span class="rec-dot"></span>
+              <span class="rec-time">{{ formatDuration(recordingSeconds) }}</span>
+              <span class="text-sm text-muted">录音中...</span>
+            </div>
+            <button class="btn btn-danger" @click="stopRecording">⏹ 停止录音</button>
+          </div>
+
+          <div v-else class="audio-playback">
+            <div class="playback-info">
+              <span class="playback-icon">🔊</span>
+              <span>录音已就绪</span>
+              <span class="text-sm text-muted">（{{ formatDuration(recordingSeconds) }}）</span>
+            </div>
+            <audio :src="audioUrl" controls class="audio-player"></audio>
+            <div class="audio-actions">
+              <button class="btn btn-secondary" @click="startRecording">🎤 重新录制</button>
+              <button class="btn btn-secondary" @click="removeAudio">🗑 删除录音</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -307,6 +441,14 @@ const resetForm = () => {
   border: none;
   cursor: pointer;
   color: #64748b;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-input {
+  display: none;
 }
 
 .upload-icon {
@@ -348,6 +490,106 @@ const resetForm = () => {
   margin-top: 24px;
 }
 
+.audio-area {
+  border: 2px dashed #cbd5e1;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+  background: #fafbfc;
+}
+
+.audio-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.record-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 28px;
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  color: white;
+  border: none;
+  border-radius: 30px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.record-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(245, 87, 108, 0.4);
+}
+
+.record-icon {
+  font-size: 22px;
+}
+
+.audio-recording {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rec-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulse 1.2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.rec-time {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1e293b;
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-playback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.playback-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #15803d;
+}
+
+.playback-icon {
+  font-size: 22px;
+}
+
+.audio-player {
+  width: 100%;
+  max-width: 360px;
+}
+
+.audio-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .success-card {
   text-align: center;
   padding: 60px 40px;
@@ -375,5 +617,32 @@ const resetForm = () => {
   gap: 16px;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+.loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #fef3c7;
+  border-top-color: #f59e0b;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 12px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  color: #92400e;
+  font-size: 14px;
 }
 </style>
