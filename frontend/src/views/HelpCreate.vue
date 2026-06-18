@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount, onMounted } from 'vue'
+import { ref, watch, onBeforeUnmount, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { helpApi, stepcardApi, deviceApi } from '@/api'
-import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard, type DeviceProfile } from '@/types'
+import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard, type DeviceProfile, type HelpRequest } from '@/types'
 
 const router = useRouter()
 
@@ -18,6 +18,8 @@ const submitted = ref(false)
 const suggestedCards = ref<StepCard[]>([])
 const isLoadingSuggestions = ref(false)
 const deviceProfile = ref<DeviceProfile | null>(null)
+const currentHelp = ref<HelpRequest | null>(null)
+let statusPollingTimer: number | null = null
 
 const loadDeviceProfile = async () => {
   try {
@@ -156,6 +158,42 @@ onBeforeUnmount(() => {
   if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
 })
 
+const getStatusLabel = (status: string) => {
+  const map: Record<string, string> = {
+    'pending': '待分派',
+    'assigned': '已分派',
+    'processing': '处理中',
+    'resolved': '已解决'
+  }
+  return map[status] || status
+}
+
+const getProcessingStatusLabel = (status?: string) => {
+  const map: Record<string, string> = {
+    'phone_guidance': '📞 电话指导中',
+    'waiting_operation': '⏳ 等待老人操作',
+    'need_confirm': '❓ 需二次确认',
+    'resolved': '✅ 已解决'
+  }
+  return status ? (map[status] || status) : ''
+}
+
+const pollHelpStatus = async () => {
+  if (!currentHelp.value) return
+  try {
+    const updated = await helpApi.get(currentHelp.value.id)
+    currentHelp.value = updated
+    if (updated.status === 'resolved') {
+      if (statusPollingTimer) {
+        clearInterval(statusPollingTimer)
+        statusPollingTimer = null
+      }
+    }
+  } catch (e) {
+    console.error('Failed to poll status:', e)
+  }
+}
+
 const submitHelp = async () => {
   if (!problemType.value || !title.value) {
     alert('请选择问题类型并填写简要描述')
@@ -163,7 +201,7 @@ const submitHelp = async () => {
   }
   submitting.value = true
   try {
-    await helpApi.create({
+    const help = await helpApi.create({
       title: title.value,
       problem_type: problemType.value,
       description: description.value,
@@ -173,7 +211,17 @@ const submitHelp = async () => {
       audio_url: audioUrl.value || undefined,
       device_profile_id: deviceProfile.value?.id
     })
+    currentHelp.value = help
+    
+    try {
+      const assignResult = await helpApi.autoAssign(help.id)
+      currentHelp.value = assignResult.help_request
+    } catch (e) {
+      console.warn('Auto assign failed:', e)
+    }
+    
     submitted.value = true
+    statusPollingTimer = window.setInterval(pollHelpStatus, 5000)
   } catch (e) {
     console.error(e)
     alert('提交失败，请重试')
@@ -181,6 +229,12 @@ const submitHelp = async () => {
     submitting.value = false
   }
 }
+
+onUnmounted(() => {
+  if (statusPollingTimer) {
+    clearInterval(statusPollingTimer)
+  }
+})
 
 const openCard = (id: number) => {
   stepcardApi.use(id)
@@ -203,6 +257,11 @@ const resetForm = () => {
   submitted.value = false
   suggestedCards.value = []
   isLoadingSuggestions.value = false
+  currentHelp.value = null
+  if (statusPollingTimer) {
+    clearInterval(statusPollingTimer)
+    statusPollingTimer = null
+  }
 }
 
 watch(deviceBrand, () => {
@@ -211,14 +270,93 @@ watch(deviceBrand, () => {
   }
 })
 
+const formatTime = (dateStr?: string) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
 onMounted(loadDeviceProfile)
 </script>
 
 <template>
   <div v-if="submitted" class="card success-card">
-    <div class="success-icon">✅</div>
-    <h2 class="success-title">求助已成功发出！</h2>
-    <p class="success-desc">您的家人已收到通知，会尽快通过电话或远程指导帮助您解决问题。</p>
+    <div v-if="currentHelp?.status === 'resolved'" class="success-icon">✅</div>
+    <div v-else-if="currentHelp?.status === 'processing'" class="success-icon">📞</div>
+    <div v-else-if="currentHelp?.status === 'assigned'" class="success-icon">👋</div>
+    <div v-else class="success-icon">⏳</div>
+    
+    <h2 class="success-title">
+      {{ currentHelp?.status === 'resolved' ? '问题已解决！' : '求助已成功发出！' }}
+    </h2>
+    <p class="success-desc">
+      {{ currentHelp?.status === 'resolved' 
+        ? '您的问题已经得到解决，感谢您使用我们的服务。' 
+        : '您的家人已收到通知，会尽快通过电话或远程指导帮助您解决问题。' }}
+    </p>
+
+    <div v-if="currentHelp" class="help-status-card">
+      <div class="status-header">
+        <span :class="['status-badge', 'badge-' + currentHelp.status]">
+          {{ getStatusLabel(currentHelp.status) }}
+        </span>
+        <span v-if="currentHelp.processing_status && currentHelp.status === 'processing'" class="processing-badge">
+          {{ getProcessingStatusLabel(currentHelp.processing_status) }}
+        </span>
+        <span v-if="currentHelp.is_timeout" class="badge badge-danger">⚠️ 响应超时</span>
+      </div>
+
+      <div v-if="currentHelp.helper" class="helper-info">
+        <div class="helper-avatar">👤</div>
+        <div class="helper-details">
+          <div class="helper-name">{{ currentHelp.helper.name }}</div>
+          <div class="helper-meta">
+            <span v-if="currentHelp.helper.is_online" class="online-indicator"></span>
+            <span>{{ currentHelp.helper.is_online ? '在线' : '离线' }}</span>
+            <span v-if="currentHelp.helper.is_on_duty" class="duty-badge">值班中</span>
+          </div>
+          <div v-if="currentHelp.expected_response_minutes" class="expected-time">
+            ⏱️ 预计 {{ currentHelp.expected_response_minutes }} 分钟内响应
+          </div>
+          <div v-if="currentHelp.assigned_at" class="assign-time">
+            📅 分派时间：{{ formatTime(currentHelp.assigned_at) }}
+          </div>
+          <div v-if="currentHelp.response_duration" class="response-time">
+            ⚡ 实际响应：{{ currentHelp.response_duration }} 分钟
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="no-helper">
+        <div class="no-helper-icon">🔍</div>
+        <div>正在为您匹配最合适的家属...</div>
+      </div>
+
+      <div v-if="currentHelp.processing_note" class="processing-notes">
+        <div class="notes-title">📝 处理备注</div>
+        <pre class="notes-content">{{ currentHelp.processing_note }}</pre>
+      </div>
+
+      <div v-if="currentHelp.status_logs && currentHelp.status_logs.length > 0" class="status-timeline">
+        <div class="timeline-title">📋 处理进度</div>
+        <div class="timeline-list">
+          <div
+            v-for="log in [...currentHelp.status_logs].sort((a, b) => new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime()).slice(0, 5)"
+            :key="log.id"
+            class="timeline-item"
+          >
+            <div class="timeline-time">{{ formatTime(log.created_at) }}</div>
+            <div class="timeline-content">
+              <span class="timeline-operator">{{ log.operator?.name || '系统' }}</span>
+              <span class="timeline-action">
+                {{ log.note || (log.new_processing_status ? getProcessingStatusLabel(log.new_processing_status) : getStatusLabel(log.new_status || '')) }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="success-actions">
       <button class="btn btn-primary btn-lg" @click="resetForm">继续发起新求助</button>
       <button class="btn btn-secondary btn-lg" @click="$router.push('/guidance')">查看求助记录</button>
@@ -731,5 +869,384 @@ onMounted(loadDeviceProfile)
 .loading-text {
   color: #92400e;
   font-size: 14px;
+}
+
+.help-status-card {
+  background: #f8fafc;
+  border-radius: 16px;
+  padding: 24px;
+  margin: 24px 0;
+  text-align: left;
+  border: 1px solid #e2e8f0;
+}
+
+.status-header {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.status-badge {
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.status-badge.badge-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-badge.badge-assigned {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status-badge.badge-processing {
+  background: #ddd6fe;
+  color: #5b21b6;
+}
+
+.status-badge.badge-resolved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.processing-badge {
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-weight: 600;
+  font-size: 14px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.helper-info {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border-radius: 12px;
+  margin-bottom: 16px;
+  border-left: 4px solid #0284c7;
+}
+
+.helper-avatar {
+  width: 60px;
+  height: 60px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  flex-shrink: 0;
+}
+
+.helper-details {
+  flex: 1;
+}
+
+.helper-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 4px;
+}
+
+.helper-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.online-indicator {
+  width: 8px;
+  height: 8px;
+  background: #10b981;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.duty-badge {
+  background: #dcfce7;
+  color: #166534;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.expected-time,
+.assign-time,
+.response-time {
+  font-size: 13px;
+  color: #475569;
+  margin-top: 2px;
+}
+
+.expected-time {
+  color: #0284c7;
+  font-weight: 500;
+}
+
+.no-helper {
+  text-align: center;
+  padding: 24px;
+  background: #fef3c7;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  color: #92400e;
+}
+
+.no-helper-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.processing-notes {
+  margin-bottom: 16px;
+  padding: 16px;
+  background: #fefce8;
+  border-radius: 12px;
+  border-left: 4px solid #f59e0b;
+}
+
+.notes-title {
+  font-weight: 600;
+  color: #854d0e;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.notes-content {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  color: #854d0e;
+  line-height: 1.8;
+}
+
+.status-timeline {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.timeline-title {
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.timeline-item {
+  display: flex;
+  gap: 12px;
+  padding: 10px 12px;
+  background: white;
+  border-radius: 8px;
+  border-left: 3px solid #667eea;
+}
+
+.timeline-time {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #64748b;
+  min-width: 90px;
+}
+
+.timeline-content {
+  flex: 1;
+  font-size: 13px;
+  color: #334155;
+}
+
+.timeline-operator {
+  font-weight: 600;
+  color: #1e293b;
+  margin-right: 8px;
+}
+
+.badge-danger {
+  background: #fee2e2 !important;
+  color: #dc2626 !important;
+}
+
+.btn {
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(102, 126, 234, 0.4);
+}
+
+.btn-secondary {
+  background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+  color: white;
+}
+
+.btn-secondary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(100, 116, 139, 0.3);
+}
+
+.btn-lg {
+  padding: 12px 28px;
+  font-size: 16px;
+}
+
+.card {
+  background: white;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.mb-6 {
+  margin-bottom: 24px;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 6px;
+}
+
+.form-input,
+.form-select,
+.form-textarea {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 14px;
+  transition: all 0.2s;
+  background: white;
+}
+
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 80px;
+  font-family: inherit;
+}
+
+.grid {
+  display: grid;
+  gap: 12px;
+}
+
+.grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 768px) {
+  .grid-2, .grid-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.text-muted {
+  color: #64748b;
+}
+
+.text-sm {
+  font-size: 13px;
+}
+
+.mt-2 {
+  margin-top: 8px;
+}
+
+.mt-3 {
+  margin-top: 12px;
+}
+
+.mt-4 {
+  margin-top: 16px;
+}
+
+.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+}
+
+.tag {
+  display: inline-block;
+  padding: 3px 10px;
+  background: #eef2ff;
+  color: #4f46e5;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-easy {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-normal {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge-hard {
+  background: #fee2e2;
+  color: #dc2626;
 }
 </style>

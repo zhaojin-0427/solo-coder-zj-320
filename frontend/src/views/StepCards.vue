@@ -214,6 +214,22 @@ onMounted(fetchCards)
           <div class="stepcard-steps-count">📋 {{ card.steps.length }} 个操作步骤</div>
           <div class="stepcard-usage">👆 使用 {{ card.usage_count }} 次</div>
         </div>
+
+        <div v-if="card.responsible_family || card.create_source === 'help_request'" class="stepcard-audit">
+          <div v-if="card.create_source === 'help_request'" class="audit-item">
+            <span class="audit-icon">📞</span>
+            <span class="audit-label">来源：求助沉淀</span>
+          </div>
+          <div v-else class="audit-item">
+            <span class="audit-icon">✏️</span>
+            <span class="audit-label">来源：手动创建</span>
+          </div>
+          <div v-if="card.responsible_family" class="audit-item">
+            <span class="audit-icon">👤</span>
+            <span class="audit-label">负责家属：{{ card.responsible_family.name }}</span>
+          </div>
+        </div>
+
         <div class="stepcard-preview">
           <div
             v-for="(step, idx) in card.steps.slice(0, 3)"
@@ -511,6 +527,30 @@ onMounted(fetchCards)
   padding: 10px 0;
   border-top: 1px solid #f1f5f9;
   border-bottom: 1px solid #f1f5f9;
+}
+
+.stepcard-audit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.audit-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.audit-icon {
+  font-size: 14px;
+}
+
+.audit-label {
+  font-weight: 500;
 }
 
 .stepcard-preview {

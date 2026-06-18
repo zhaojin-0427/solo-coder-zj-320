@@ -8,6 +8,11 @@ class User(db.Model):
     role = db.Column(db.String(20), nullable=False)
     avatar = db.Column(db.String(200))
     phone = db.Column(db.String(20))
+    expertise = db.Column(db.String(200))
+    is_online = db.Column(db.Boolean, default=False)
+    is_on_duty = db.Column(db.Boolean, default=False)
+    last_online_at = db.Column(db.DateTime)
+    expected_response_minutes = db.Column(db.Integer, default=5)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class HelpRequest(db.Model):
@@ -20,21 +25,31 @@ class HelpRequest(db.Model):
     audio_url = db.Column(db.String(500))
     device_brand = db.Column(db.String(50))
     system_version = db.Column(db.String(50))
-    status = db.Column(db.String(20), default='pending')
+    status = db.Column(db.String(30), default='pending')
+    processing_status = db.Column(db.String(30))
     requester_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     helper_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    assigned_at = db.Column(db.DateTime)
+    responded_at = db.Column(db.DateTime)
+    response_duration = db.Column(db.Integer)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     resolved_at = db.Column(db.DateTime)
     resolution_duration = db.Column(db.Integer)
     is_independent = db.Column(db.Boolean, default=False)
     is_repeat = db.Column(db.Boolean, default=False)
+    transfer_count = db.Column(db.Integer, default=0)
+    is_timeout = db.Column(db.Boolean, default=False)
+    processing_note = db.Column(db.Text)
     device_profile_id = db.Column(db.Integer, db.ForeignKey('device_profiles.id'))
+    create_source = db.Column(db.String(20), default='direct')
 
     requester = db.relationship('User', foreign_keys=[requester_id])
     helper = db.relationship('User', foreign_keys=[helper_id])
     guidance_records = db.relationship('GuidanceRecord', backref='help_request', cascade='all, delete-orphan')
     step_card_id = db.Column(db.Integer, db.ForeignKey('step_cards.id'))
     device_profile = db.relationship('DeviceProfile', backref='help_requests')
+    status_logs = db.relationship('HelpStatusLog', backref='help_request', cascade='all, delete-orphan')
+    assignments = db.relationship('HelpAssignment', backref='help_request', cascade='all, delete-orphan')
 
 class GuidanceRecord(db.Model):
     __tablename__ = 'guidance_records'
@@ -57,11 +72,16 @@ class StepCard(db.Model):
     description = db.Column(db.Text)
     usage_count = db.Column(db.Integer, default=0)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    responsible_family_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    create_source = db.Column(db.String(20), default='manual')
+    source_help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     steps = db.relationship('StepCardStep', backref='step_card', cascade='all, delete-orphan')
-    help_requests = db.relationship('HelpRequest', backref='step_card')
+    help_requests = db.relationship('HelpRequest', foreign_keys=[HelpRequest.step_card_id], backref='step_card')
+    created_by_user = db.relationship('User', foreign_keys=[created_by])
+    responsible_family = db.relationship('User', foreign_keys=[responsible_family_id])
 
 class StepCardStep(db.Model):
     __tablename__ = 'step_card_steps'
@@ -130,3 +150,31 @@ class PracticeStepFeedback(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     step_card_step = db.relationship('StepCardStep')
+
+class HelpStatusLog(db.Model):
+    __tablename__ = 'help_status_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'), nullable=False)
+    old_status = db.Column(db.String(30))
+    new_status = db.Column(db.String(30))
+    old_processing_status = db.Column(db.String(30))
+    new_processing_status = db.Column(db.String(30))
+    operator_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    note = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    operator = db.relationship('User', foreign_keys=[operator_id])
+
+class HelpAssignment(db.Model):
+    __tablename__ = 'help_assignments'
+    id = db.Column(db.Integer, primary_key=True)
+    help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'), nullable=False)
+    from_helper_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    to_helper_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    assignment_type = db.Column(db.String(20), default='auto')
+    reason = db.Column(db.Text)
+    match_score = db.Column(db.Float)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    from_helper = db.relationship('User', foreign_keys=[from_helper_id])
+    to_helper = db.relationship('User', foreign_keys=[to_helper_id])

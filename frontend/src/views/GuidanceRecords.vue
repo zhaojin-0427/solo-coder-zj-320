@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { helpApi, stepcardApi, practiceApi, deviceApi } from '@/api'
-import type { HelpRequest, PracticeRecord, StepCardStep, DeviceProfile } from '@/types'
+import { helpApi, stepcardApi, practiceApi, deviceApi, familyApi } from '@/api'
+import type { HelpRequest, PracticeRecord, StepCardStep, DeviceProfile, User, HelpStatusLog } from '@/types'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -30,15 +30,60 @@ const supplementData = ref({
   network_environment: ''
 })
 
+const familyMembers = ref<User[]>([])
+const showTransferModal = ref(false)
+const transferToId = ref<number>(0)
+const transferReason = ref('')
+const showNoteModal = ref(false)
+const noteContent = ref('')
+const showAssignModal = ref(false)
+const assignToId = ref<number>(0)
+const assignReason = ref('')
+const recommendCandidates = ref<any[]>([])
+
+const currentUserId = 2
+
+const processingStatusOptions = [
+  { value: 'phone_guidance', label: '📞 电话指导中', color: '#667eea' },
+  { value: 'waiting_operation', label: '⏳ 等待老人操作', color: '#f59e0b' },
+  { value: 'need_confirm', label: '❓ 需二次确认', color: '#ef4444' },
+  { value: 'resolved', label: '✅ 已解决', color: '#10b981' }
+]
+
+const getProcessingStatusInfo = (status?: string) => {
+  return processingStatusOptions.find(o => o.value === status) || { label: '未知状态', color: '#94a3b8' }
+}
+
+const getStatusLabel = (status: string) => {
+  const map: Record<string, string> = {
+    'pending': '待分派',
+    'assigned': '已分派',
+    'processing': '处理中',
+    'resolved': '已解决'
+  }
+  return map[status] || status
+}
+
 const filteredHelps = computed(() => {
   if (filterStatus.value === 'all') return helps.value
   return helps.value.filter((h) => h.status === filterStatus.value)
 })
 
 const pendingCount = computed(() => helps.value.filter((h) => h.status === 'pending').length)
+const assignedCount = computed(() => helps.value.filter((h) => h.status === 'assigned').length)
+const processingCount = computed(() => helps.value.filter((h) => h.status === 'processing').length)
 
 const fetchHelps = async () => {
   helps.value = await helpApi.list()
+  for (const h of helps.value) {
+    if (h.status === 'assigned' || h.status === 'processing') {
+      helpApi.checkTimeout(h.id)
+    }
+  }
+}
+
+const fetchFamilyMembers = async () => {
+  familyMembers.value = await familyApi.listMembers()
 }
 
 const selectHelp = (h: HelpRequest) => {
@@ -180,7 +225,139 @@ const submitSupplement = async () => {
 const fetchAll = () => {
   fetchHelps()
   fetchPractices()
+  fetchFamilyMembers()
 }
+
+const autoAssign = async (helpId: number) => {
+  try {
+    const result = await helpApi.autoAssign(helpId)
+    alert(`已自动分派给 ${result.assigned_to.name}，匹配度 ${result.match_score} 分`)
+    await fetchHelps()
+    if (selectedHelp.value?.id === helpId) {
+      selectedHelp.value = result.help_request
+    }
+  } catch (e: any) {
+    alert(e.response?.data?.error || '分派失败')
+  }
+}
+
+const openManualAssign = async () => {
+  if (!selectedHelp.value) return
+  try {
+    recommendCandidates.value = await familyApi.recommendForHelp(selectedHelp.value.id)
+  } catch (e) {
+    console.error(e)
+  }
+  assignToId.value = 0
+  assignReason.value = ''
+  showAssignModal.value = true
+}
+
+const manualAssign = async () => {
+  if (!selectedHelp.value || !assignToId.value) {
+    alert('请选择分派对象')
+    return
+  }
+  try {
+    const result = await helpApi.manualAssign(selectedHelp.value.id, {
+      to_helper_id: assignToId.value,
+      reason: assignReason.value
+    })
+    alert('分派成功')
+    showAssignModal.value = false
+    await fetchHelps()
+    selectedHelp.value = result
+  } catch (e: any) {
+    alert(e.response?.data?.error || '分派失败')
+  }
+}
+
+const claimHelp = async () => {
+  if (!selectedHelp.value) return
+  try {
+    const result = await helpApi.claim(selectedHelp.value.id, { helper_id: currentUserId })
+    alert('领取成功，开始处理')
+    await fetchHelps()
+    selectedHelp.value = result
+  } catch (e: any) {
+    alert(e.response?.data?.error || '领取失败')
+  }
+}
+
+const openTransfer = () => {
+  if (!selectedHelp.value) return
+  transferToId.value = 0
+  transferReason.value = ''
+  showTransferModal.value = true
+}
+
+const transferHelp = async () => {
+  if (!selectedHelp.value || !transferToId.value) {
+    alert('请选择转派对象')
+    return
+  }
+  try {
+    const result = await helpApi.transfer(selectedHelp.value.id, {
+      to_helper_id: transferToId.value,
+      from_helper_id: currentUserId,
+      reason: transferReason.value
+    })
+    alert('转派成功')
+    showTransferModal.value = false
+    await fetchHelps()
+    selectedHelp.value = result
+  } catch (e: any) {
+    alert(e.response?.data?.error || '转派失败')
+  }
+}
+
+const updateProcessingStatus = async (status: string) => {
+  if (!selectedHelp.value) return
+  try {
+    const result = await helpApi.updateProcessing(selectedHelp.value.id, {
+      processing_status: status
+    })
+    alert('状态已更新')
+    await fetchHelps()
+    selectedHelp.value = result
+  } catch (e: any) {
+    alert(e.response?.data?.error || '更新失败')
+  }
+}
+
+const openNoteModal = () => {
+  noteContent.value = ''
+  showNoteModal.value = true
+}
+
+const submitNote = async () => {
+  if (!selectedHelp.value || !noteContent.value.trim()) {
+    alert('请填写备注内容')
+    return
+  }
+  try {
+    const result = await helpApi.addNote(selectedHelp.value.id, {
+      note: noteContent.value.trim(),
+      operator_id: currentUserId
+    })
+    alert('备注已添加')
+    showNoteModal.value = false
+    selectedHelp.value = result
+  } catch (e: any) {
+    alert(e.response?.data?.error || '添加备注失败')
+  }
+}
+
+const canClaim = computed(() => {
+  if (!selectedHelp.value) return false
+  return selectedHelp.value.status === 'pending' ||
+    (selectedHelp.value.status === 'assigned' && selectedHelp.value.helper_id !== currentUserId)
+})
+
+const isMyTask = computed(() => {
+  if (!selectedHelp.value) return false
+  return selectedHelp.value.helper_id === currentUserId
+})
 
 onMounted(fetchAll)
 </script>
@@ -206,7 +383,13 @@ onMounted(fetchAll)
             全部
           </button>
           <button :class="['tab-btn', { active: filterStatus === 'pending' }]" @click="filterStatus = 'pending'">
-            待处理 ({{ pendingCount }})
+            待分派 ({{ pendingCount }})
+          </button>
+          <button :class="['tab-btn', { active: filterStatus === 'assigned' }]" @click="filterStatus = 'assigned'">
+            已分派 ({{ assignedCount }})
+          </button>
+          <button :class="['tab-btn', { active: filterStatus === 'processing' }]" @click="filterStatus = 'processing'">
+            处理中 ({{ processingCount }})
           </button>
           <button :class="['tab-btn', { active: filterStatus === 'resolved' }]" @click="filterStatus = 'resolved'">
             已解决
@@ -219,14 +402,20 @@ onMounted(fetchAll)
           v-for="h in filteredHelps"
           :key="h.id"
           class="help-item"
-          :class="{ active: selectedHelp?.id === h.id, resolved: h.status === 'resolved' }"
+          :class="{ active: selectedHelp?.id === h.id, resolved: h.status === 'resolved', timeout: h.is_timeout }"
           @click="selectHelp(h)"
         >
           <div class="help-item-header">
             <span :class="['badge', 'badge-' + h.status]">
-              {{ h.status === 'pending' ? '待处理' : '已解决' }}
+              {{ getStatusLabel(h.status) }}
+            </span>
+            <span v-if="h.processing_status && h.status === 'processing'" 
+                  :style="{ background: getProcessingStatusInfo(h.processing_status).color + '20', color: getProcessingStatusInfo(h.processing_status).color }"
+                  class="badge">
+              {{ getProcessingStatusInfo(h.processing_status).label }}
             </span>
             <span v-if="h.is_repeat" class="badge badge-normal">重复问题</span>
+            <span v-if="h.is_timeout" class="badge badge-danger">⚠️ 超时</span>
           </div>
           <div class="help-title">{{ h.title }}</div>
           <div class="help-meta">
@@ -236,6 +425,9 @@ onMounted(fetchAll)
           <div class="help-footer">
             <span class="text-sm text-muted">{{ h.requester?.name || '老人' }}</span>
             <span class="text-sm text-muted">{{ formatTime(h.created_at) }}</span>
+          </div>
+          <div v-if="h.helper" class="help-helper">
+            <span class="text-sm">👤 {{ h.helper.name }}</span>
           </div>
         </div>
 
@@ -290,8 +482,64 @@ onMounted(fetchAll)
             <span v-if="selectedHelp.device_brand" class="tag">{{ selectedHelp.device_brand }}</span>
             <span v-if="selectedHelp.system_version" class="tag">{{ selectedHelp.system_version }}</span>
             <span :class="['badge', 'badge-' + selectedHelp.status]">
-              {{ selectedHelp.status === 'pending' ? '待处理' : '已解决' }}
+              {{ getStatusLabel(selectedHelp.status) }}
             </span>
+            <span v-if="selectedHelp.is_timeout" class="badge badge-danger">⚠️ 响应超时</span>
+          </div>
+        </div>
+
+        <div v-if="selectedHelp.status !== 'resolved'" class="action-toolbar">
+          <button v-if="selectedHelp.status === 'pending'" class="btn btn-primary btn-sm" @click="autoAssign(selectedHelp.id)">
+            🤖 智能分派
+          </button>
+          <button v-if="selectedHelp.status === 'pending'" class="btn btn-secondary btn-sm" @click="openManualAssign">
+            👋 手动分派
+          </button>
+          <button v-if="canClaim" class="btn btn-success btn-sm" @click="claimHelp">
+            ✋ 我来处理
+          </button>
+          <button v-if="isMyTask && selectedHelp.status === 'processing'" class="btn btn-warning btn-sm" @click="openTransfer">
+            🔄 转派他人
+          </button>
+          <button v-if="isMyTask && selectedHelp.status === 'processing'" class="btn btn-info btn-sm" @click="openNoteModal">
+            📝 添加备注
+          </button>
+        </div>
+
+        <div v-if="isMyTask && selectedHelp.status === 'processing'" class="processing-status-bar">
+          <span class="status-label">当前状态：</span>
+          <div class="status-buttons">
+            <button
+              v-for="opt in processingStatusOptions"
+              :key="opt.value"
+              :class="['status-btn', { active: selectedHelp.processing_status === opt.value }]"
+              :style="selectedHelp.processing_status === opt.value ? { background: opt.color, color: 'white' } : {}"
+              @click="updateProcessingStatus(opt.value)"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="selectedHelp.helper" class="helper-info-section">
+          <div class="helper-info-card">
+            <div class="helper-avatar">👤</div>
+            <div class="helper-info">
+              <div class="helper-name">{{ selectedHelp.helper.name }}</div>
+              <div class="helper-meta">
+                <span v-if="selectedHelp.helper.is_online" class="online-dot"></span>
+                <span v-if="selectedHelp.helper.is_online">在线</span>
+                <span v-else>离线</span>
+                <span v-if="selectedHelp.helper.is_on_duty" class="badge badge-success ml-2">值班中</span>
+              </div>
+              <div v-if="selectedHelp.assigned_at" class="helper-time">
+                分派时间：{{ formatTime(selectedHelp.assigned_at) }}
+                <span v-if="selectedHelp.response_duration" class="ml-4">响应时长：{{ selectedHelp.response_duration }} 分钟</span>
+              </div>
+              <div v-if="selectedHelp.expected_response_minutes" class="expected-time">
+                预计响应：{{ selectedHelp.expected_response_minutes }} 分钟内
+              </div>
+            </div>
           </div>
         </div>
 
@@ -365,6 +613,13 @@ onMounted(fetchAll)
           </div>
         </div>
 
+        <div v-if="selectedHelp.processing_note" class="detail-section">
+          <h4 class="detail-subtitle">📝 处理备注</h4>
+          <div class="processing-notes">
+            <pre class="note-content">{{ selectedHelp.processing_note }}</pre>
+          </div>
+        </div>
+
         <div class="detail-section">
           <h4 class="detail-subtitle">
             分步指导
@@ -390,7 +645,7 @@ onMounted(fetchAll)
             </div>
           </div>
 
-          <div v-if="selectedHelp.status === 'pending'" class="add-step-form">
+          <div v-if="selectedHelp.status === 'processing' && isMyTask" class="add-step-form">
             <div class="form-group mb-3">
               <label class="form-label">添加第 {{ selectedHelp.guidance_records.length + 1 }} 步</label>
               <input
@@ -411,7 +666,27 @@ onMounted(fetchAll)
           </div>
         </div>
 
-        <div v-if="selectedHelp.status === 'pending'" class="detail-actions">
+        <div v-if="selectedHelp.status_logs && selectedHelp.status_logs.length > 0" class="detail-section">
+          <h4 class="detail-subtitle">📋 状态变更记录</h4>
+          <div class="status-log-list">
+            <div
+              v-for="log in [...selectedHelp.status_logs].sort((a, b) => new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime())"
+              :key="log.id"
+              class="status-log-item"
+            >
+              <div class="log-time">{{ formatTime(log.created_at) }}</div>
+              <div class="log-content">
+                <span v-if="log.operator" class="log-operator">{{ log.operator.name }}</span>
+                <span v-else class="log-operator">系统</span>
+                <span class="log-action">
+                  {{ log.note || (log.new_processing_status ? getProcessingStatusInfo(log.new_processing_status).label : getStatusLabel(log.new_status || '')) }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="selectedHelp.status === 'processing' && isMyTask" class="detail-actions">
           <button class="btn btn-primary" :disabled="selectedHelp.guidance_records.length === 0" @click="resolveHelp">
             ✅ 标记为已解决
           </button>
@@ -428,6 +703,18 @@ onMounted(fetchAll)
           </button>
         </div>
 
+        <div v-else-if="selectedHelp.status === 'pending'" class="detail-actions">
+          <button class="btn btn-primary" @click="autoAssign(selectedHelp.id)">
+            🤖 智能分派给最合适的家属
+          </button>
+          <button class="btn btn-secondary" @click="openManualAssign">
+            👋 手动选择处理人
+          </button>
+          <button class="btn btn-success" @click="claimHelp">
+            ✋ 我来处理这个求助
+          </button>
+        </div>
+
         <div v-else class="resolved-info">
           <div class="resolved-meta">
             <div>
@@ -441,6 +728,10 @@ onMounted(fetchAll)
             <div>
               <span class="text-muted">独立完成：</span>
               <span class="font-bold">{{ selectedHelp.is_independent ? '是' : '否' }}</span>
+            </div>
+            <div v-if="selectedHelp.transfer_count > 0">
+              <span class="text-muted">转派次数：</span>
+              <span class="font-bold">{{ selectedHelp.transfer_count }} 次</span>
             </div>
           </div>
           <button v-if="!selectedHelp.step_card_id" class="btn btn-success" @click="createStepCard">
@@ -614,6 +905,126 @@ onMounted(fetchAll)
         </div>
       </div>
     </div>
+
+    <div v-if="showTransferModal" class="modal-overlay" @click.self="showTransferModal = false">
+      <div class="modal-content" style="max-width: 480px;">
+        <div class="modal-header">
+          <h3>🔄 转派求助</h3>
+          <button class="modal-close" @click="showTransferModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">选择转派对象 *</label>
+            <select v-model="transferToId" class="form-select">
+              <option :value="0">请选择家属</option>
+              <option
+                v-for="m in familyMembers.filter(f => f.id !== currentUserId)"
+                :key="m.id"
+                :value="m.id"
+              >
+                {{ m.name }}
+                <span v-if="m.is_online"> (在线)</span>
+                <span v-if="m.is_on_duty"> [值班]</span>
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">转派原因（可选）</label>
+            <textarea
+              v-model="transferReason"
+              class="form-textarea"
+              rows="3"
+              placeholder="例如：该问题涉及苹果设备，我不太熟悉..."
+            ></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showTransferModal = false">取消</button>
+          <button class="btn btn-primary" @click="transferHelp">确认转派</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showNoteModal" class="modal-overlay" @click.self="showNoteModal = false">
+      <div class="modal-content" style="max-width: 480px;">
+        <div class="modal-header">
+          <h3>📝 添加处理备注</h3>
+          <button class="modal-close" @click="showNoteModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">备注内容 *</label>
+            <textarea
+              v-model="noteContent"
+              class="form-textarea"
+              rows="4"
+              placeholder="记录处理进展、老人反馈等信息..."
+            ></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showNoteModal = false">取消</button>
+          <button class="btn btn-primary" @click="submitNote">确认添加</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showAssignModal" class="modal-overlay" @click.self="showAssignModal = false">
+      <div class="modal-content" style="max-width: 560px;">
+        <div class="modal-header">
+          <h3>👋 手动分派求助</h3>
+          <button class="modal-close" @click="showAssignModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="recommendCandidates.length > 0" class="recommend-section mb-4">
+            <h4 class="detail-subtitle">🤖 系统推荐</h4>
+            <div class="candidate-list">
+              <div
+                v-for="(c, idx) in recommendCandidates.slice(0, 3)"
+                :key="c.user.id"
+                class="candidate-item"
+                :class="{ selected: assignToId === c.user.id }"
+                @click="assignToId = c.user.id"
+              >
+                <div class="candidate-rank">{{ idx + 1 }}</div>
+                <div class="candidate-info">
+                  <div class="candidate-name">{{ c.user.name }}</div>
+                  <div class="candidate-reason text-sm text-muted">{{ c.reason }}</div>
+                </div>
+                <div class="candidate-score">
+                  <div class="score-value">{{ c.score }}</div>
+                  <div class="score-label">匹配度</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">选择处理人 *</label>
+            <select v-model="assignToId" class="form-select">
+              <option :value="0">请选择家属</option>
+              <option v-for="m in familyMembers" :key="m.id" :value="m.id">
+                {{ m.name }}
+                <span v-if="m.is_online"> (在线)</span>
+                <span v-if="m.is_on_duty"> [值班]</span>
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">分派原因（可选）</label>
+            <textarea
+              v-model="assignReason"
+              class="form-textarea"
+              rows="2"
+              placeholder="例如：根据问题类型和设备品牌匹配..."
+            ></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showAssignModal = false">取消</button>
+          <button class="btn btn-primary" @click="manualAssign">确认分派</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -687,10 +1098,15 @@ onMounted(fetchAll)
   opacity: 0.75;
 }
 
+.help-item.timeout {
+  border-left: 4px solid #ef4444;
+}
+
 .help-item-header {
   display: flex;
   gap: 6px;
   margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 
 .help-title {
@@ -712,10 +1128,18 @@ onMounted(fetchAll)
   justify-content: space-between;
 }
 
+.help-helper {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e2e8f0;
+  color: #6366f1;
+  font-weight: 500;
+}
+
 .detail-content {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
 
 .detail-tags {
@@ -1108,4 +1532,562 @@ onMounted(fetchAll)
   gap: 6px;
   flex-wrap: wrap;
 }
-</style>
+
+.action-toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 12px;
+}
+
+.processing-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f1f5f9;
+  border-radius: 12px;
+  flex-wrap: wrap;
+}
+
+.status-label {
+  font-weight: 600;
+  color: #475569;
+  flex-shrink: 0;
+}
+
+.status-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.status-btn {
+  padding: 8px 14px;
+  border: 2px solid #e2e8f0;
+  background: white;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.status-btn:hover {
+  border-color: #667eea;
+}
+
+.status-btn.active {
+  border-color: transparent;
+  color: white;
+}
+
+.helper-info-section {
+  padding: 16px;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border-radius: 12px;
+  border-left: 4px solid #0284c7;
+}
+
+.helper-info-card {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.helper-avatar {
+  width: 56px;
+  height: 56px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  flex-shrink: 0;
+}
+
+.helper-info {
+  flex: 1;
+}
+
+.helper-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 4px;
+}
+
+.helper-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.online-dot {
+  width: 8px;
+  height: 8px;
+  background: #10b981;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.helper-time {
+  font-size: 13px;
+  color: #475569;
+  margin-bottom: 2px;
+}
+
+.expected-time {
+  font-size: 13px;
+  color: #0284c7;
+  font-weight: 500;
+}
+
+.ml-2 {
+  margin-left: 8px;
+}
+
+.ml-4 {
+  margin-left: 16px;
+}
+
+.text-green {
+  color: #16a34a;
+}
+
+.processing-notes {
+  padding: 16px;
+  background: #fefce8;
+  border-radius: 12px;
+  border-left: 4px solid #f59e0b;
+}
+
+.note-content {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.8;
+  color: #854d0e;
+}
+
+.status-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.status-log-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border-radius: 10px;
+  border-left: 3px solid #667eea;
+}
+
+.log-time {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #64748b;
+  min-width: 100px;
+}
+
+.log-content {
+  flex: 1;
+  font-size: 14px;
+  color: #334155;
+}
+
+.log-operator {
+  font-weight: 600;
+  color: #1e293b;
+  margin-right: 8px;
+}
+
+.log-action {
+  color: #475569;
+}
+
+.recommend-section {
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 12px;
+}
+
+.candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.candidate-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: white;
+  border-radius: 10px;
+  border: 2px solid #e2e8f0;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.candidate-item:hover {
+  border-color: #667eea;
+}
+
+.candidate-item.selected {
+  border-color: #667eea;
+  background: #eef2ff;
+}
+
+.candidate-rank {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.candidate-info {
+  flex: 1;
+}
+
+.candidate-name {
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+
+.candidate-score {
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.score-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: #667eea;
+  line-height: 1;
+}
+
+.score-label {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.badge-danger {
+  background: #fee2e2 !important;
+  color: #dc2626 !important;
+}
+
+.badge-success {
+  background: #dcfce7 !important;
+  color: #166534 !important;
+}
+
+.btn-warning {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+  border: none;
+}
+
+.btn-warning:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.4);
+}
+
+.btn-info {
+  background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+  color: white;
+  border: none;
+}
+
+.btn-info:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(6, 182, 212, 0.4);
+}
+
+.btn-success {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  border: none;
+}
+
+.btn-success:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(16, 185, 129, 0.4);
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  border: none;
+}
+
+.btn-danger:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(239, 68, 68, 0.4);
+}
+
+.btn-secondary {
+  background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+  color: white;
+  border: none;
+}
+
+.btn-secondary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(100, 116, 139, 0.3);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(102, 126, 234, 0.4);
+}
+
+.btn {
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.btn-lg {
+  padding: 12px 28px;
+  font-size: 16px;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 6px;
+}
+
+.form-input,
+.form-select,
+.form-textarea {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 14px;
+  transition: all 0.2s;
+  background: white;
+}
+
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 80px;
+  font-family: inherit;
+}
+
+.grid {
+  display: grid;
+  gap: 12px;
+}
+
+.grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (max-width: 768px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mb-3 {
+  margin-bottom: 12px;
+}
+
+.mb-4 {
+  margin-bottom: 16px;
+}
+
+.mb-6 {
+  margin-bottom: 24px;
+}
+
+.mt-2 {
+  margin-top: 8px;
+}
+
+.mt-3 {
+  margin-top: 12px;
+}
+
+.mt-4 {
+  margin-top: 16px;
+}
+
+.text-sm {
+  font-size: 13px;
+}
+
+.text-muted {
+  color: #64748b;
+}
+
+.text-green {
+  color: #16a34a;
+}
+
+.text-orange {
+  color: #ea580c;
+}
+
+.font-bold {
+  font-weight: 700;
+}
+
+.card {
+  background: white;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge-assigned {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.badge-processing {
+  background: #ddd6fe;
+  color: #5b21b6;
+}
+
+.badge-resolved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-normal {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.tag {
+  display: inline-block;
+  padding: 3px 10px;
+  background: #eef2ff;
+  color: #4f46e5;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.step-item {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  background: #f8fafc;
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+
+.step-number {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.step-content {
+  flex: 1;
+}
+
+.step-text {
+  font-size: 14px;
+  color: #1e293b;
+  line-height: 1.6;
+}
+
+.tip-box {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #64748b;
+}
+
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 8px;
+}

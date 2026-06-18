@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta
 from app import db
-from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback, DeviceProfile, StepCardDeviceTip
+from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback, DeviceProfile, StepCardDeviceTip, HelpStatusLog, HelpAssignment
 
 help_bp = Blueprint('help', __name__)
 stepcard_bp = Blueprint('stepcard', __name__)
@@ -9,26 +9,61 @@ stats_bp = Blueprint('stats', __name__)
 user_bp = Blueprint('user', __name__)
 practice_bp = Blueprint('practice', __name__)
 device_bp = Blueprint('device', __name__)
+family_bp = Blueprint('family', __name__)
 
 def serialize_user(u):
-    return {'id': u.id, 'name': u.name, 'role': u.role, 'avatar': u.avatar, 'phone': u.phone}
+    return {
+        'id': u.id, 'name': u.name, 'role': u.role, 'avatar': u.avatar, 'phone': u.phone,
+        'expertise': u.expertise, 'is_online': u.is_online, 'is_on_duty': u.is_on_duty,
+        'last_online_at': u.last_online_at.isoformat() if u.last_online_at else None,
+        'expected_response_minutes': u.expected_response_minutes
+    }
 
 def serialize_help(h):
     return {
         'id': h.id, 'title': h.title, 'problem_type': h.problem_type,
         'description': h.description, 'image_url': h.image_url, 'audio_url': h.audio_url,
         'device_brand': h.device_brand, 'system_version': h.system_version,
-        'status': h.status, 'requester_id': h.requester_id,
+        'status': h.status, 'processing_status': h.processing_status,
+        'requester_id': h.requester_id,
         'requester': serialize_user(h.requester) if h.requester else None,
         'helper': serialize_user(h.helper) if h.helper else None,
         'helper_id': h.helper_id, 'step_card_id': h.step_card_id,
         'device_profile_id': h.device_profile_id,
         'device_profile': serialize_device_profile(h.device_profile) if h.device_profile else None,
         'created_at': h.created_at.isoformat() if h.created_at else None,
+        'assigned_at': h.assigned_at.isoformat() if h.assigned_at else None,
+        'responded_at': h.responded_at.isoformat() if h.responded_at else None,
+        'response_duration': h.response_duration,
         'resolved_at': h.resolved_at.isoformat() if h.resolved_at else None,
         'resolution_duration': h.resolution_duration,
         'is_independent': h.is_independent, 'is_repeat': h.is_repeat,
-        'guidance_records': [serialize_guidance(g) for g in h.guidance_records]
+        'transfer_count': h.transfer_count, 'is_timeout': h.is_timeout,
+        'processing_note': h.processing_note, 'create_source': h.create_source,
+        'guidance_records': [serialize_guidance(g) for g in h.guidance_records],
+        'status_logs': [serialize_status_log(l) for l in h.status_logs],
+        'assignments': [serialize_assignment(a) for a in h.assignments],
+        'expected_response_minutes': h.helper.expected_response_minutes if h.helper else 5
+    }
+
+def serialize_status_log(l):
+    return {
+        'id': l.id, 'help_request_id': l.help_request_id,
+        'old_status': l.old_status, 'new_status': l.new_status,
+        'old_processing_status': l.old_processing_status,
+        'new_processing_status': l.new_processing_status,
+        'operator': serialize_user(l.operator) if l.operator else None,
+        'note': l.note, 'created_at': l.created_at.isoformat() if l.created_at else None
+    }
+
+def serialize_assignment(a):
+    return {
+        'id': a.id, 'help_request_id': a.help_request_id,
+        'from_helper': serialize_user(a.from_helper) if a.from_helper else None,
+        'to_helper': serialize_user(a.to_helper) if a.to_helper else None,
+        'assignment_type': a.assignment_type, 'reason': a.reason,
+        'match_score': a.match_score,
+        'created_at': a.created_at.isoformat() if a.created_at else None
     }
 
 def serialize_guidance(g):
@@ -45,6 +80,10 @@ def serialize_stepcard(s):
         'difficulty': s.difficulty, 'device_brand': s.device_brand,
         'system_version': s.system_version, 'description': s.description,
         'usage_count': s.usage_count, 'created_by': s.created_by,
+        'responsible_family_id': s.responsible_family_id,
+        'responsible_family': serialize_user(s.responsible_family) if s.responsible_family else None,
+        'create_source': s.create_source,
+        'source_help_request_id': s.source_help_request_id,
         'created_at': s.created_at.isoformat() if s.created_at else None,
         'updated_at': s.updated_at.isoformat() if s.updated_at else None,
         'steps': [serialize_step(st) for st in s.steps],
@@ -130,38 +169,6 @@ def get_help(id):
     h = HelpRequest.query.get_or_404(id)
     return jsonify(serialize_help(h))
 
-@help_bp.route('/', methods=['POST'])
-def create_help():
-    data = request.json
-    h = HelpRequest(
-        title=data['title'],
-        problem_type=data['problem_type'],
-        description=data.get('description'),
-        image_url=data.get('image_url'),
-        audio_url=data.get('audio_url'),
-        device_brand=data.get('device_brand'),
-        system_version=data.get('system_version'),
-        requester_id=data.get('requester_id', 1),
-        device_profile_id=data.get('device_profile_id')
-    )
-    existing = StepCard.query.filter_by(problem_type=h.problem_type)
-    if h.device_brand:
-        brand_cards = existing.filter(
-            db.or_(StepCard.device_brand == h.device_brand, StepCard.device_brand == None)
-        ).all()
-        if brand_cards:
-            existing = StepCard.query.filter_by(problem_type=h.problem_type).filter(
-                db.or_(StepCard.device_brand == h.device_brand, StepCard.device_brand == None)
-            )
-        else:
-            existing = StepCard.query.filter_by(problem_type=h.problem_type)
-    first = existing.first()
-    if first:
-        h.is_repeat = True
-    db.session.add(h)
-    db.session.commit()
-    return jsonify(serialize_help(h)), 201
-
 @help_bp.route('/<int:id>/guidance', methods=['POST'])
 def add_guidance(id):
     data = request.json
@@ -176,20 +183,6 @@ def add_guidance(id):
     db.session.add(g)
     db.session.commit()
     return jsonify(serialize_guidance(g)), 201
-
-@help_bp.route('/<int:id>/resolve', methods=['POST'])
-def resolve_help(id):
-    data = request.json
-    h = HelpRequest.query.get_or_404(id)
-    h.status = 'resolved'
-    h.helper_id = data.get('helper_id', 2)
-    h.resolved_at = datetime.utcnow()
-    if h.created_at:
-        delta = h.resolved_at - h.created_at
-        h.resolution_duration = int(delta.total_seconds() // 60)
-    h.is_independent = data.get('is_independent', False)
-    db.session.commit()
-    return jsonify(serialize_help(h))
 
 @stepcard_bp.route('/', methods=['GET'])
 def list_stepcards():
@@ -233,34 +226,6 @@ def create_stepcard():
             image_url=step_data.get('image_url')
         )
         db.session.add(st)
-    db.session.commit()
-    return jsonify(serialize_stepcard(s)), 201
-
-@stepcard_bp.route('/from_help/<int:help_id>', methods=['POST'])
-def create_from_help(help_id):
-    h = HelpRequest.query.get_or_404(help_id)
-    data = request.json
-    s = StepCard(
-        title=data.get('title', h.title),
-        problem_type=h.problem_type,
-        difficulty=data.get('difficulty', 'normal'),
-        device_brand=h.device_brand,
-        system_version=h.system_version,
-        description=data.get('description', h.description),
-        created_by=data.get('created_by', 2)
-    )
-    db.session.add(s)
-    db.session.flush()
-    for g in sorted(h.guidance_records, key=lambda x: x.step_number):
-        st = StepCardStep(
-            step_card_id=s.id,
-            step_number=g.step_number,
-            content=g.content,
-            tip=g.tip,
-            image_url=g.image_url
-        )
-        db.session.add(st)
-    h.step_card_id = s.id
     db.session.commit()
     return jsonify(serialize_stepcard(s)), 201
 
@@ -742,3 +707,436 @@ def stats_device():
         ],
         'top_difficulty_tags': [{'tag': t, 'count': c} for t, c in sorted_tags[:10]]
     })
+
+def add_status_log(help_request_id, operator_id, old_status, new_status, old_processing=None, new_processing=None, note=None):
+    log = HelpStatusLog(
+        help_request_id=help_request_id,
+        operator_id=operator_id,
+        old_status=old_status,
+        new_status=new_status,
+        old_processing_status=old_processing,
+        new_processing_status=new_processing,
+        note=note
+    )
+    db.session.add(log)
+
+def calculate_match_score(family_member, problem_type, device_brand):
+    score = 0.0
+    if family_member.is_online:
+        score += 30
+    if family_member.is_on_duty:
+        score += 25
+    if family_member.expertise:
+        expertise_list = [e.strip() for e in family_member.expertise.split(',')]
+        if problem_type in expertise_list:
+            score += 25
+        if device_brand and device_brand in expertise_list:
+            score += 20
+    return score
+
+def find_best_family(problem_type, device_brand, exclude_ids=None):
+    family_members = User.query.filter_by(role='family').all()
+    if exclude_ids:
+        family_members = [f for f in family_members if f.id not in exclude_ids]
+    
+    scored = []
+    for fm in family_members:
+        score = calculate_match_score(fm, problem_type, device_brand)
+        scored.append((fm, score))
+    
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored
+
+@help_bp.route('/<int:id>/auto_assign', methods=['POST'])
+def auto_assign_help(id):
+    h = HelpRequest.query.get_or_404(id)
+    data = request.json or {}
+    operator_id = data.get('operator_id', 2)
+    
+    exclude_ids = []
+    for a in h.assignments:
+        if a.to_helper_id:
+            exclude_ids.append(a.to_helper_id)
+    
+    candidates = find_best_family(h.problem_type, h.device_brand, exclude_ids)
+    if not candidates:
+        return jsonify({'error': '没有可用的家属处理人'}), 400
+    
+    best_family, score = candidates[0]
+    
+    old_status = h.status
+    old_processing = h.processing_status
+    
+    h.helper_id = best_family.id
+    h.status = 'assigned'
+    h.assigned_at = datetime.utcnow()
+    h.is_timeout = False
+    
+    assignment = HelpAssignment(
+        help_request_id=id,
+        to_helper_id=best_family.id,
+        assignment_type='auto',
+        match_score=score,
+        reason=f'智能分派：问题类型{h.problem_type}，设备品牌{h.device_brand or "未知"}'
+    )
+    db.session.add(assignment)
+    
+    add_status_log(id, operator_id, old_status, 'assigned', old_processing, None, '系统智能分派')
+    
+    db.session.commit()
+    return jsonify({
+        'help_request': serialize_help(h),
+        'assigned_to': serialize_user(best_family),
+        'match_score': score,
+        'candidates': [{'user': serialize_user(u), 'score': s} for u, s in candidates[:3]]
+    })
+
+@help_bp.route('/<int:id>/manual_assign', methods=['POST'])
+def manual_assign_help(id):
+    h = HelpRequest.query.get_or_404(id)
+    data = request.json
+    to_helper_id = data.get('to_helper_id')
+    operator_id = data.get('operator_id', 2)
+    reason = data.get('reason', '')
+    
+    to_helper = User.query.get_or_404(to_helper_id)
+    
+    old_status = h.status
+    old_processing = h.processing_status
+    from_helper_id = h.helper_id
+    
+    h.helper_id = to_helper_id
+    h.status = 'assigned'
+    h.assigned_at = datetime.utcnow()
+    h.is_timeout = False
+    
+    assignment = HelpAssignment(
+        help_request_id=id,
+        from_helper_id=from_helper_id,
+        to_helper_id=to_helper_id,
+        assignment_type='manual',
+        reason=reason
+    )
+    db.session.add(assignment)
+    
+    if from_helper_id:
+        h.transfer_count = (h.transfer_count or 0) + 1
+    
+    add_status_log(id, operator_id, old_status, 'assigned', old_processing, None, reason or '人工分派')
+    
+    db.session.commit()
+    return jsonify(serialize_help(h))
+
+@help_bp.route('/<int:id>/claim', methods=['POST'])
+def claim_help(id):
+    h = HelpRequest.query.get_or_404(id)
+    data = request.json
+    helper_id = data.get('helper_id', 2)
+    
+    if h.status == 'assigned' and h.helper_id and h.helper_id != helper_id:
+        return jsonify({'error': '该求助已被其他家属领取'}), 400
+    
+    old_status = h.status
+    old_processing = h.processing_status
+    
+    h.helper_id = helper_id
+    h.status = 'processing'
+    h.processing_status = 'phone_guidance'
+    h.responded_at = datetime.utcnow()
+    
+    if h.assigned_at:
+        delta = h.responded_at - h.assigned_at
+        h.response_duration = int(delta.total_seconds() // 60)
+    
+    assignment = HelpAssignment(
+        help_request_id=id,
+        to_helper_id=helper_id,
+        assignment_type='claim',
+        reason='家属主动领取'
+    )
+    db.session.add(assignment)
+    
+    add_status_log(id, helper_id, old_status, 'processing', old_processing, 'phone_guidance', '家属领取求助')
+    
+    db.session.commit()
+    return jsonify(serialize_help(h))
+
+@help_bp.route('/<int:id>/transfer', methods=['POST'])
+def transfer_help(id):
+    h = HelpRequest.query.get_or_404(id)
+    data = request.json
+    from_helper_id = data.get('from_helper_id', 2)
+    to_helper_id = data.get('to_helper_id')
+    reason = data.get('reason', '')
+    
+    if h.helper_id and h.helper_id != from_helper_id:
+        return jsonify({'error': '只有当前处理人可以转派'}), 400
+    
+    to_helper = User.query.get_or_404(to_helper_id)
+    
+    old_status = h.status
+    old_processing = h.processing_status
+    
+    assignment = HelpAssignment(
+        help_request_id=id,
+        from_helper_id=from_helper_id,
+        to_helper_id=to_helper_id,
+        assignment_type='transfer',
+        reason=reason
+    )
+    db.session.add(assignment)
+    
+    h.helper_id = to_helper_id
+    h.assigned_at = datetime.utcnow()
+    h.transfer_count = (h.transfer_count or 0) + 1
+    h.is_timeout = False
+    
+    add_status_log(id, from_helper_id, old_status, 'assigned', old_processing, None, f'转派给{to_helper.name}：{reason}')
+    
+    db.session.commit()
+    return jsonify(serialize_help(h))
+
+@help_bp.route('/<int:id>/update_processing', methods=['POST'])
+def update_processing_status(id):
+    h = HelpRequest.query.get_or_404(id)
+    data = request.json
+    processing_status = data.get('processing_status')
+    operator_id = data.get('operator_id', 2)
+    note = data.get('note')
+    
+    valid_statuses = ['phone_guidance', 'waiting_operation', 'need_confirm', 'resolved']
+    if processing_status not in valid_statuses:
+        return jsonify({'error': '无效的处理状态'}), 400
+    
+    old_processing = h.processing_status
+    
+    if processing_status == 'resolved':
+        return resolve_help(id)
+    
+    h.processing_status = processing_status
+    if note:
+        h.processing_note = (h.processing_note or '') + f'\n[{datetime.utcnow().strftime("%Y-%m-%d %H:%M")}] {note}'
+    
+    add_status_log(id, operator_id, h.status, h.status, old_processing, processing_status, note)
+    
+    db.session.commit()
+    return jsonify(serialize_help(h))
+
+@help_bp.route('/<int:id>/add_note', methods=['POST'])
+def add_processing_note(id):
+    h = HelpRequest.query.get_or_404(id)
+    data = request.json
+    note = data.get('note', '')
+    operator_id = data.get('operator_id', 2)
+    
+    if not note:
+        return jsonify({'error': '备注内容不能为空'}), 400
+    
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+    operator = User.query.get(operator_id)
+    operator_name = operator.name if operator else '系统'
+    h.processing_note = (h.processing_note or '') + f'\n[{timestamp}] {operator_name}：{note}'
+    
+    add_status_log(id, operator_id, h.status, h.status, h.processing_status, h.processing_status, note)
+    
+    db.session.commit()
+    return jsonify(serialize_help(h))
+
+@help_bp.route('/<int:id>/check_timeout', methods=['POST'])
+def check_timeout(id):
+    h = HelpRequest.query.get_or_404(id)
+    
+    if h.status not in ['assigned', 'processing'] or not h.helper_id:
+        return jsonify({'is_timeout': False})
+    
+    if not h.assigned_at:
+        return jsonify({'is_timeout': False})
+    
+    helper = h.helper
+    expected_minutes = helper.expected_response_minutes if helper else 5
+    now = datetime.utcnow()
+    elapsed = (now - h.assigned_at).total_seconds() // 60
+    
+    if elapsed > expected_minutes * 2 and not h.is_timeout:
+        h.is_timeout = True
+        add_status_log(id, None, h.status, h.status, h.processing_status, h.processing_status, 
+                      f'响应超时：已等待{int(elapsed)}分钟，超过预期{expected_minutes * 2}分钟')
+        db.session.commit()
+    
+    return jsonify({
+        'is_timeout': h.is_timeout,
+        'elapsed_minutes': int(elapsed),
+        'expected_minutes': expected_minutes * 2
+    })
+
+@family_bp.route('/members', methods=['GET'])
+def list_family_members():
+    members = User.query.filter_by(role='family').all()
+    return jsonify([serialize_user(m) for m in members])
+
+@family_bp.route('/<int:id>/update_status', methods=['POST'])
+def update_family_status(id):
+    u = User.query.get_or_404(id)
+    data = request.json
+    
+    if 'is_online' in data:
+        u.is_online = data['is_online']
+        if data['is_online']:
+            u.last_online_at = datetime.utcnow()
+    
+    if 'is_on_duty' in data:
+        u.is_on_duty = data['is_on_duty']
+    
+    if 'expertise' in data:
+        u.expertise = data['expertise']
+    
+    if 'expected_response_minutes' in data:
+        u.expected_response_minutes = data['expected_response_minutes']
+    
+    db.session.commit()
+    return jsonify(serialize_user(u))
+
+@family_bp.route('/<int:id>/assigned_helps', methods=['GET'])
+def get_family_assigned_helps(id):
+    status = request.args.get('status')
+    query = HelpRequest.query.filter_by(helper_id=id).order_by(HelpRequest.created_at.desc())
+    if status:
+        query = query.filter_by(status=status)
+    helps = query.all()
+    return jsonify([serialize_help(h) for h in helps])
+
+@stats_bp.route('/family_efficiency', methods=['GET'])
+def stats_family_efficiency():
+    from sqlalchemy import func, desc
+    
+    family_members = User.query.filter_by(role='family').all()
+    results = []
+    
+    for fm in family_members:
+        helps = HelpRequest.query.filter_by(helper_id=fm.id).all()
+        total_count = len(helps)
+        resolved_count = len([h for h in helps if h.status == 'resolved'])
+        transferred_count = len([h for h in helps if h.transfer_count and h.transfer_count > 0])
+        timeout_count = len([h for h in helps if h.is_timeout])
+        
+        response_durations = [h.response_duration for h in helps if h.response_duration]
+        avg_response = sum(response_durations) / len(response_durations) if response_durations else 0
+        
+        resolution_durations = [h.resolution_duration for h in helps if h.resolution_duration]
+        avg_resolution = sum(resolution_durations) / len(resolution_durations) if resolution_durations else 0
+        
+        results.append({
+            'family_member': serialize_user(fm),
+            'total_count': total_count,
+            'resolved_count': resolved_count,
+            'pending_count': total_count - resolved_count,
+            'avg_response_minutes': round(avg_response, 1),
+            'avg_resolution_minutes': round(avg_resolution, 1),
+            'transfer_count': transferred_count,
+            'timeout_count': timeout_count
+        })
+    
+    results.sort(key=lambda x: x['resolved_count'], reverse=True)
+    
+    return jsonify(results)
+
+@stepcard_bp.route('/from_help/<int:help_id>', methods=['POST'])
+def create_from_help(help_id):
+    h = HelpRequest.query.get_or_404(help_id)
+    data = request.json
+    s = StepCard(
+        title=data.get('title', h.title),
+        problem_type=h.problem_type,
+        difficulty=data.get('difficulty', 'normal'),
+        device_brand=h.device_brand,
+        system_version=h.system_version,
+        description=data.get('description', h.description),
+        created_by=data.get('created_by', 2),
+        responsible_family_id=h.helper_id,
+        create_source='help_request',
+        source_help_request_id=h.id
+    )
+    db.session.add(s)
+    db.session.flush()
+    for g in sorted(h.guidance_records, key=lambda x: x.step_number):
+        st = StepCardStep(
+            step_card_id=s.id,
+            step_number=g.step_number,
+            content=g.content,
+            tip=g.tip,
+            image_url=g.image_url
+        )
+        db.session.add(st)
+    h.step_card_id = s.id
+    db.session.commit()
+    return jsonify(serialize_stepcard(s)), 201
+
+@help_bp.route('/', methods=['POST'])
+def create_help():
+    data = request.json
+    h = HelpRequest(
+        title=data['title'],
+        problem_type=data['problem_type'],
+        description=data.get('description'),
+        image_url=data.get('image_url'),
+        audio_url=data.get('audio_url'),
+        device_brand=data.get('device_brand'),
+        system_version=data.get('system_version'),
+        requester_id=data.get('requester_id', 1),
+        device_profile_id=data.get('device_profile_id'),
+        create_source=data.get('create_source', 'direct')
+    )
+    existing = StepCard.query.filter_by(problem_type=h.problem_type)
+    if h.device_brand:
+        brand_cards = existing.filter(
+            db.or_(StepCard.device_brand == h.device_brand, StepCard.device_brand == None)
+        ).all()
+        if brand_cards:
+            existing = StepCard.query.filter_by(problem_type=h.problem_type).filter(
+                db.or_(StepCard.device_brand == h.device_brand, StepCard.device_brand == None)
+            )
+        else:
+            existing = StepCard.query.filter_by(problem_type=h.problem_type)
+    first = existing.first()
+    if first:
+        h.is_repeat = True
+    db.session.add(h)
+    db.session.flush()
+    
+    add_status_log(h.id, h.requester_id, None, 'pending', None, None, '老人发起求助')
+    
+    db.session.commit()
+    return jsonify(serialize_help(h)), 201
+
+@help_bp.route('/<int:id>/resolve', methods=['POST'])
+def resolve_help(id):
+    data = request.json
+    h = HelpRequest.query.get_or_404(id)
+    
+    old_status = h.status
+    old_processing = h.processing_status
+    
+    h.status = 'resolved'
+    h.processing_status = 'resolved'
+    h.helper_id = data.get('helper_id', h.helper_id or 2)
+    h.resolved_at = datetime.utcnow()
+    if h.created_at:
+        delta = h.resolved_at - h.created_at
+        h.resolution_duration = int(delta.total_seconds() // 60)
+    h.is_independent = data.get('is_independent', False)
+    
+    add_status_log(id, h.helper_id, old_status, 'resolved', old_processing, 'resolved', '问题已解决')
+    
+    db.session.commit()
+    return jsonify(serialize_help(h))
+
+@family_bp.route('/recommend/<int:help_id>', methods=['GET'])
+def recommend_family_for_help(help_id):
+    h = HelpRequest.query.get_or_404(help_id)
+    candidates = find_best_family(h.problem_type, h.device_brand)
+    
+    return jsonify([{
+        'user': serialize_user(u),
+        'score': s,
+        'reason': f'在线:{u.is_online}, 值班:{u.is_on_duty}, 擅长:{u.expertise or "未设置"}'
+    } for u, s in candidates])

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { HelpRequest, StepCard, User, StatsOverview, GuidanceRecord, PracticeRecord, PracticeStepFeedback, CardPracticeStats, PracticeStats, StepCardStep, DeviceProfile, DeviceStats, StepCardDeviceTip } from '@/types'
+import type { HelpRequest, StepCard, User, StatsOverview, GuidanceRecord, PracticeRecord, PracticeStepFeedback, CardPracticeStats, PracticeStats, StepCardStep, DeviceProfile, DeviceStats, StepCardDeviceTip, FamilyEfficiency } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -19,7 +19,31 @@ export const helpApi = {
   addGuidance: (id: number, data: Partial<GuidanceRecord>) =>
     api.post<GuidanceRecord>(`/help/${id}/guidance`, data).then(r => r.data),
   resolve: (id: number, data: { helper_id?: number; is_independent?: boolean } = {}) =>
-    api.post<HelpRequest>(`/help/${id}/resolve`, data).then(r => r.data)
+    api.post<HelpRequest>(`/help/${id}/resolve`, data).then(r => r.data),
+  autoAssign: (id: number, data?: { operator_id?: number }) =>
+    api.post(`/help/${id}/auto_assign`, data || {}).then(r => r.data),
+  manualAssign: (id: number, data: { to_helper_id: number; operator_id?: number; reason?: string }) =>
+    api.post<HelpRequest>(`/help/${id}/manual_assign`, data).then(r => r.data),
+  claim: (id: number, data?: { helper_id?: number }) =>
+    api.post<HelpRequest>(`/help/${id}/claim`, data || {}).then(r => r.data),
+  transfer: (id: number, data: { to_helper_id: number; from_helper_id?: number; reason?: string }) =>
+    api.post<HelpRequest>(`/help/${id}/transfer`, data).then(r => r.data),
+  updateProcessing: (id: number, data: { processing_status: string; operator_id?: number; note?: string }) =>
+    api.post<HelpRequest>(`/help/${id}/update_processing`, data).then(r => r.data),
+  addNote: (id: number, data: { note: string; operator_id?: number }) =>
+    api.post<HelpRequest>(`/help/${id}/add_note`, data).then(r => r.data),
+  checkTimeout: (id: number) =>
+    api.post(`/help/${id}/check_timeout`).then(r => r.data)
+}
+
+export const familyApi = {
+  listMembers: () => api.get<User[]>('/family/members').then(r => r.data),
+  updateStatus: (id: number, data: Partial<User>) =>
+    api.post<User>(`/family/${id}/update_status`, data).then(r => r.data),
+  getAssignedHelps: (id: number, status?: string) =>
+    api.get<HelpRequest[]>(`/family/${id}/assigned_helps`, { params: status ? { status } : {} }).then(r => r.data),
+  recommendForHelp: (helpId: number) =>
+    api.get(`/family/recommend/${helpId}`).then(r => r.data)
 }
 
 export const stepcardApi = {
@@ -74,7 +98,8 @@ export const statsApi = {
   overview: () => api.get<StatsOverview>('/stats/overview').then(r => r.data),
   timeline: () => api.get<{ date: string; count: number }[]>('/stats/timeline').then(r => r.data),
   practice: () => api.get<PracticeStats>('/stats/practice').then(r => r.data),
-  device: () => api.get<DeviceStats>('/stats/device').then(r => r.data)
+  device: () => api.get<DeviceStats>('/stats/device').then(r => r.data),
+  familyEfficiency: () => api.get<FamilyEfficiency[]>('/stats/family_efficiency').then(r => r.data)
 }
 
 export const deviceApi = {

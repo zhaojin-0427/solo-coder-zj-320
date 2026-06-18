@@ -12,7 +12,7 @@ import {
 } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { statsApi, helpApi } from '@/api'
-import type { StatsOverview, HelpRequest, DeviceStats } from '@/types'
+import type { StatsOverview, HelpRequest, DeviceStats, FamilyEfficiency } from '@/types'
 
 use([
   CanvasRenderer,
@@ -34,6 +34,7 @@ const recentHelps = ref<HelpRequest[]>([])
 const timeline = ref<{ date: string; count: number }[]>([])
 const practiceStats = ref<PracticeStats | null>(null)
 const deviceStats = ref<DeviceStats | null>(null)
+const familyEfficiency = ref<FamilyEfficiency[]>([])
 
 const typeColors = {
   '看不清字': '#667eea',
@@ -346,12 +347,140 @@ const brandProblemOption = computed(() => {
   }
 })
 
+const familyResponseTimeOption = computed(() => {
+  const data = familyEfficiency.value
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params: any) => {
+        const item = params[0]
+        return `${item.name}<br/>平均响应时长：${item.value} 分钟`
+      }
+    },
+    grid: { left: 60, right: 20, top: 30, bottom: 40 },
+    xAxis: {
+      type: 'category',
+      data: data.map(d => d.family_member.name),
+      axisLabel: { fontSize: 12 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '分钟',
+      nameTextStyle: { fontSize: 12, color: '#64748b' },
+      splitLine: { lineStyle: { color: '#f1f5f9' } }
+    },
+    series: [{
+      type: 'bar',
+      data: data.map(d => d.avg_response_minutes),
+      barWidth: 36,
+      itemStyle: {
+        borderRadius: [6, 6, 0, 0],
+        color: {
+          type: 'linear',
+          x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: '#667eea' },
+            { offset: 1, color: '#764ba2' }
+          ]
+        }
+      }
+    }]
+  }
+})
+
+const familyResolutionTimeOption = computed(() => {
+  const data = familyEfficiency.value
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params: any) => {
+        const item = params[0]
+        return `${item.name}<br/>平均解决时长：${item.value} 分钟`
+      }
+    },
+    grid: { left: 60, right: 20, top: 30, bottom: 40 },
+    xAxis: {
+      type: 'category',
+      data: data.map(d => d.family_member.name),
+      axisLabel: { fontSize: 12 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '分钟',
+      nameTextStyle: { fontSize: 12, color: '#64748b' },
+      splitLine: { lineStyle: { color: '#f1f5f9' } }
+    },
+    series: [{
+      type: 'bar',
+      data: data.map(d => d.avg_resolution_minutes),
+      barWidth: 36,
+      itemStyle: {
+        borderRadius: [6, 6, 0, 0],
+        color: {
+          type: 'linear',
+          x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: '#10b981' },
+            { offset: 1, color: '#059669' }
+          ]
+        }
+      }
+    }]
+  }
+})
+
+const familyVolumeOption = computed(() => {
+  const data = familyEfficiency.value
+  return {
+    tooltip: {
+      trigger: 'item',
+      formatter: (params: any) => {
+        return `${params.name}<br/>处理数量：${params.value} 次<br/>占比：${params.percent}%`
+      }
+    },
+    legend: {
+      bottom: 0,
+      left: 'center',
+      textStyle: { fontSize: 12 }
+    },
+    series: [
+      {
+        type: 'pie',
+        radius: ['45%', '72%'],
+        center: ['50%', '42%'],
+        avoidLabelOverlap: true,
+        itemStyle: {
+          borderRadius: 8,
+          borderColor: '#fff',
+          borderWidth: 2
+        },
+        label: {
+          show: true,
+          formatter: '{b}\n{d}%',
+          fontSize: 12
+        },
+        data: data.map((d, idx) => {
+          const colors = ['#667eea', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#06b6d4']
+          return {
+            value: d.total_count,
+            name: d.family_member.name,
+            itemStyle: { color: colors[idx % colors.length] }
+          }
+        })
+      }
+    ]
+  }
+})
+
 const fetchData = async () => {
   overview.value = await statsApi.overview()
   recentHelps.value = (await helpApi.list()).slice(0, 6)
   timeline.value = await statsApi.timeline()
   practiceStats.value = await statsApi.practice()
   deviceStats.value = await statsApi.device()
+  familyEfficiency.value = await statsApi.familyEfficiency()
 }
 
 const formatTime = (t?: string) => {
@@ -690,6 +819,99 @@ onMounted(fetchData)
               <div>暂无解决时长数据</div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="family-efficiency-section mt-6">
+      <h3 class="section-title mb-4">👨‍👩‍👧‍👦 家属响应效率分析</h3>
+
+      <div v-if="familyEfficiency.length > 0" class="grid grid-3 mb-6">
+        <div class="card">
+          <h3 class="section-title mb-4">📊 处理数量分布</h3>
+          <VChart :option="familyVolumeOption" style="height: 320px" autoresize />
+        </div>
+
+        <div class="card">
+          <h3 class="section-title mb-4">⏱️ 平均响应时长</h3>
+          <VChart :option="familyResponseTimeOption" style="height: 320px" autoresize />
+        </div>
+
+        <div class="card">
+          <h3 class="section-title mb-4">✅ 平均解决时长</h3>
+          <VChart :option="familyResolutionTimeOption" style="height: 320px" autoresize />
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="section-title mb-4">📋 家属效率明细</h3>
+        <div class="family-table">
+          <div class="family-table-header">
+            <div class="col-name">家属姓名</div>
+            <div class="col-stat">处理总数</div>
+            <div class="col-stat">已解决</div>
+            <div class="col-stat">待处理</div>
+            <div class="col-stat">平均响应</div>
+            <div class="col-stat">平均解决</div>
+            <div class="col-stat">转派次数</div>
+            <div class="col-stat">超时次数</div>
+            <div class="col-status">在线状态</div>
+            <div class="col-status">值班状态</div>
+          </div>
+          <div class="family-table-body">
+            <div
+              v-for="(fe, idx) in familyEfficiency"
+              :key="fe.family_member.id"
+              class="family-table-row"
+            >
+              <div class="col-name">
+                <span :class="['rank-badge', { 'rank-1': idx === 0, 'rank-2': idx === 1, 'rank-3': idx === 2 }]">
+                  {{ idx + 1 }}
+                </span>
+                {{ fe.family_member.name }}
+              </div>
+              <div class="col-stat">
+                <span class="stat-number">{{ fe.total_count }}</span>
+              </div>
+              <div class="col-stat">
+                <span class="stat-number text-green">{{ fe.resolved_count }}</span>
+              </div>
+              <div class="col-stat">
+                <span class="stat-number text-orange">{{ fe.pending_count }}</span>
+              </div>
+              <div class="col-stat">
+                <span class="stat-number">{{ fe.avg_response_minutes }} 分</span>
+              </div>
+              <div class="col-stat">
+                <span class="stat-number">{{ fe.avg_resolution_minutes }} 分</span>
+              </div>
+              <div class="col-stat">
+                <span :class="['stat-badge', fe.transfer_count > 0 ? 'badge-warning' : 'badge-success']">
+                  {{ fe.transfer_count }} 次
+                </span>
+              </div>
+              <div class="col-stat">
+                <span :class="['stat-badge', fe.timeout_count > 0 ? 'badge-danger' : 'badge-success']">
+                  {{ fe.timeout_count }} 次
+                </span>
+              </div>
+              <div class="col-status">
+                <span v-if="fe.family_member.is_online" class="status-online">在线</span>
+                <span v-else class="status-offline">离线</span>
+              </div>
+              <div class="col-status">
+                <span v-if="fe.family_member.is_on_duty" class="duty-active">值班中</span>
+                <span v-else class="duty-inactive">休息</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="card">
+        <div class="empty-state" style="padding: 60px;">
+          <div class="empty-state-icon">📊</div>
+          <div>暂无家属效率数据</div>
         </div>
       </div>
     </div>
@@ -1276,5 +1498,182 @@ onMounted(fetchData)
   font-weight: 700;
   color: #475569;
   flex-shrink: 0;
+}
+
+.family-efficiency-section {
+  background: #f8fafc;
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.family-table {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+}
+
+.family-table-header {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr 0.8fr 0.8fr 0.9fr 0.9fr 0.8fr 0.8fr 0.8fr 0.8fr;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.family-table-header > div {
+  padding: 14px 12px;
+  text-align: center;
+}
+
+.family-table-header .col-name {
+  text-align: left;
+  padding-left: 20px;
+}
+
+.family-table-body {
+  background: white;
+}
+
+.family-table-row {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr 0.8fr 0.8fr 0.9fr 0.9fr 0.8fr 0.8fr 0.8fr 0.8fr;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.2s;
+}
+
+.family-table-row:hover {
+  background: #f8fafc;
+}
+
+.family-table-row:last-child {
+  border-bottom: none;
+}
+
+.family-table-row > div {
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.family-table-row .col-name {
+  justify-content: flex-start;
+  padding-left: 20px;
+  font-weight: 500;
+  color: #1e293b;
+}
+
+.stat-number {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.stat-number.text-green {
+  color: #10b981;
+}
+
+.stat-number.text-orange {
+  color: #f59e0b;
+}
+
+.stat-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.badge-success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge-danger {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 12px;
+  background: #e2e8f0;
+  color: #64748b;
+  margin-right: 10px;
+}
+
+.rank-badge.rank-1 {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  color: white;
+}
+
+.rank-badge.rank-2 {
+  background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+  color: white;
+}
+
+.rank-badge.rank-3 {
+  background: linear-gradient(135deg, #cd7f32 0%, #b8860b 100%);
+  color: white;
+}
+
+.status-online {
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-offline {
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.duty-active {
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.duty-inactive {
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.empty-state {
+  text-align: center;
+  color: #94a3b8;
+}
+
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
 }
 </style>

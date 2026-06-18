@@ -4,6 +4,11 @@ export interface User {
   role: string
   avatar?: string
   phone?: string
+  expertise?: string
+  is_online?: boolean
+  is_on_duty?: boolean
+  last_online_at?: string
+  expected_response_minutes?: number
 }
 
 export interface GuidanceRecord {
@@ -16,6 +21,29 @@ export interface GuidanceRecord {
   created_at?: string
 }
 
+export interface HelpStatusLog {
+  id: number
+  help_request_id: number
+  old_status?: string
+  new_status?: string
+  old_processing_status?: string
+  new_processing_status?: string
+  operator?: User
+  note?: string
+  created_at?: string
+}
+
+export interface HelpAssignment {
+  id: number
+  help_request_id: number
+  from_helper?: User
+  to_helper?: User
+  assignment_type: string
+  reason?: string
+  match_score?: number
+  created_at?: string
+}
+
 export interface HelpRequest {
   id: number
   title: string
@@ -25,7 +53,8 @@ export interface HelpRequest {
   audio_url?: string
   device_brand?: string
   system_version?: string
-  status: 'pending' | 'resolved'
+  status: 'pending' | 'assigned' | 'processing' | 'resolved'
+  processing_status?: 'phone_guidance' | 'waiting_operation' | 'need_confirm' | 'resolved'
   requester_id?: number
   helper_id?: number
   step_card_id?: number
@@ -34,11 +63,32 @@ export interface HelpRequest {
   requester?: User
   helper?: User
   created_at?: string
+  assigned_at?: string
+  responded_at?: string
+  response_duration?: number
   resolved_at?: string
   resolution_duration?: number
   is_independent: boolean
   is_repeat: boolean
+  transfer_count: number
+  is_timeout: boolean
+  processing_note?: string
+  create_source: 'direct' | 'practice'
   guidance_records: GuidanceRecord[]
+  status_logs: HelpStatusLog[]
+  assignments: HelpAssignment[]
+  expected_response_minutes?: number
+}
+
+export interface FamilyEfficiency {
+  family_member: User
+  total_count: number
+  resolved_count: number
+  pending_count: number
+  avg_response_minutes: number
+  avg_resolution_minutes: number
+  transfer_count: number
+  timeout_count: number
 }
 
 export interface StepCardStep {
@@ -70,6 +120,10 @@ export interface StepCard {
   description?: string
   usage_count: number
   created_by?: number
+  responsible_family_id?: number
+  responsible_family?: User
+  create_source: 'manual' | 'help_request'
+  source_help_request_id?: number
   created_at?: string
   updated_at?: string
   steps: StepCardStep[]
