@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { stepcardApi } from '@/api'
-import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard, type StepCardStep } from '@/types'
+import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard, type StepCardStep, type CardPracticeStats } from '@/types'
 
 const cards = ref<StepCard[]>([])
 const filterType = ref<string>('all')
 const showCreateModal = ref(false)
+const cardStatsMap = ref<Map<number, CardPracticeStats>>(new Map())
 
 const newCard = ref({
   title: '',
@@ -32,8 +33,24 @@ const typeStats = computed(() => {
   return stats
 })
 
+const fetchCardStats = async (cardId: number) => {
+  try {
+    const stats = await stepcardApi.getPracticeStats(cardId)
+    cardStatsMap.value.set(cardId, stats)
+  } catch (e) {
+    console.error('Failed to fetch card stats:', e)
+  }
+}
+
 const fetchCards = async () => {
   cards.value = await stepcardApi.list()
+  cards.value.forEach((card) => {
+    fetchCardStats(card.id)
+  })
+}
+
+const getCardStats = (cardId: number): CardPracticeStats | null => {
+  return cardStatsMap.value.get(cardId) || null
 }
 
 const addStep = () => {
@@ -150,6 +167,29 @@ onMounted(fetchCards)
             还有 {{ card.steps.length - 3 }} 个步骤...
           </div>
           <div v-if="card.steps.length === 0" class="text-sm text-muted">暂无步骤</div>
+        </div>
+
+        <div class="practice-stats-row" v-if="getCardStats(card.id)">
+          <div class="practice-stat-item">
+            <span class="practice-stat-label">练习次数</span>
+            <span class="practice-stat-value">{{ getCardStats(card.id)?.recent_practice_count || 0 }}</span>
+          </div>
+          <div class="practice-stat-item" v-if="getCardStats(card.id)?.most_stuck_step">
+            <span class="practice-stat-label">卡住最多</span>
+            <span class="practice-stat-value text-orange">
+              第 {{ getCardStats(card.id)?.most_stuck_step?.step_number }} 步
+            </span>
+          </div>
+          <div class="practice-stat-item" v-if="getCardStats(card.id)?.needs_optimization">
+            <span class="practice-stat-label">状态</span>
+            <span class="practice-stat-badge badge-warning">需优化</span>
+          </div>
+          <div class="practice-stat-item" v-else-if="getCardStats(card.id)?.total_practice_count > 0">
+            <span class="practice-stat-label">完成率</span>
+            <span class="practice-stat-value text-green">
+              {{ getCardStats(card.id)?.completion_rate_percent }}%
+            </span>
+          </div>
         </div>
       </div>
 
@@ -485,5 +525,52 @@ onMounted(fetchCards)
   font-size: 18px;
   cursor: pointer;
   align-self: flex-start;
+}
+
+.practice-stats-row {
+  display: flex;
+  gap: 12px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid #f1f5f9;
+  flex-wrap: wrap;
+}
+
+.practice-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.practice-stat-label {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.practice-stat-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.practice-stat-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-warning {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.text-green {
+  color: #16a34a;
+}
+
+.text-orange {
+  color: #ea580c;
 }
 </style>

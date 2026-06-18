@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { stepcardApi } from '@/api'
-import { PROBLEM_TYPES, type StepCard } from '@/types'
+import { stepcardApi, practiceApi, helpApi } from '@/api'
+import { PROBLEM_TYPES, type StepCard, type PracticeRecord, type PracticeStepFeedback } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,6 +12,14 @@ const searchQuery = ref('')
 const selectedType = ref<string>('')
 const viewingCard = ref<StepCard | null>(null)
 const cardsLoaded = ref(false)
+
+const isPracticeMode = ref(false)
+const currentPractice = ref<PracticeRecord | null>(null)
+const stepFeedbacks = ref<Map<number, PracticeStepFeedback['status']>>(new Map())
+const practiceFeedback = ref('')
+const showHelpConvertModal = ref(false)
+const helpDescription = ref('')
+const practiceCompleted = ref(false)
 
 const filteredCards = computed(() => {
   let list = cards.value
@@ -72,11 +80,131 @@ const openCard = async (card: StepCard) => {
 
 const closeCard = () => {
   viewingCard.value = null
+  isPracticeMode.value = false
+  currentPractice.value = null
+  stepFeedbacks.value = new Map()
+  practiceFeedback.value = ''
+  practiceCompleted.value = false
+  showHelpConvertModal.value = false
+  helpDescription.value = ''
   router.push('/library')
+}
+
+const startPractice = async () => {
+  if (!viewingCard.value) return
+  try {
+    const practice = await practiceApi.create({
+      step_card_id: viewingCard.value.id,
+      source: 'library'
+    })
+    currentPractice.value = practice
+    isPracticeMode.value = true
+    stepFeedbacks.value = new Map()
+    practiceFeedback.value = ''
+    practiceCompleted.value = false
+  } catch (e) {
+    console.error('Failed to start practice:', e)
+    alert('开始练习失败，请重试')
+  }
+}
+
+const setStepStatus = async (stepId: number, stepNumber: number, status: PracticeStepFeedback['status']) => {
+  if (!currentPractice.value) return
+  try {
+    await practiceApi.addStepFeedback(currentPractice.value.id, {
+      step_card_step_id: stepId,
+      step_number: stepNumber,
+      status
+    })
+    stepFeedbacks.value.set(stepId, status)
+  } catch (e) {
+    console.error('Failed to set step status:', e)
+  }
+}
+
+const getStepStatus = (stepId: number): PracticeStepFeedback['status'] | null => {
+  return stepFeedbacks.value.get(stepId) || null
+}
+
+const sortedSteps = computed(() => {
+  if (!viewingCard.value) return []
+  return [...viewingCard.value.steps].sort((a, b) => a.step_number - b.step_number)
+})
+
+const allStepsCompleted = computed(() => {
+  if (!viewingCard.value) return false
+  const steps = sortedSteps.value
+  return steps.every(step => {
+    const status = getStepStatus(step.id)
+    return status === 'completed'
+  })
+})
+
+const stuckStepNumber = computed(() => {
+  const steps = sortedSteps.value
+  for (const step of steps) {
+    const status = getStepStatus(step.id)
+    if (status === 'cannot_understand' || status === 'cannot_find') {
+      return step.step_number
+    }
+  }
+  return undefined
+})
+
+const completePractice = async () => {
+  if (!currentPractice.value) return
+  try {
+    await practiceApi.complete(currentPractice.value.id, {
+      feedback: practiceFeedback.value || undefined,
+      is_independent: allStepsCompleted.value,
+      stuck_step_number: stuckStepNumber.value
+    })
+    practiceCompleted.value = true
+  } catch (e) {
+    console.error('Failed to complete practice:', e)
+    alert('完成练习失败，请重试')
+  }
+}
+
+const openConvertToHelp = () => {
+  if (!viewingCard.value) return
+  helpDescription.value = `练习「${viewingCard.value.title}」时遇到困难，需要帮助`
+  if (stuckStepNumber.value) {
+    helpDescription.value += `，卡在第 ${stuckStepNumber.value} 步`
+  }
+  if (practiceFeedback.value) {
+    helpDescription.value += `。反馈：${practiceFeedback.value}`
+  }
+  showHelpConvertModal.value = true
+}
+
+const convertToHelp = async () => {
+  if (!currentPractice.value) return
+  try {
+    await practiceApi.convertToHelp(currentPractice.value.id, {
+      description: helpDescription.value
+    })
+    alert('求助已发出！家人会尽快联系您')
+    showHelpConvertModal.value = false
+    closeCard()
+    router.push('/guidance')
+  } catch (e) {
+    console.error('Failed to convert to help:', e)
+    alert('发起求助失败，请重试')
+  }
 }
 
 const difficultyLabel = (d: string) => {
   return d === 'easy' ? '简单' : d === 'normal' ? '一般' : '较难'
+}
+
+const statusLabel = (status: PracticeStepFeedback['status']) => {
+  switch (status) {
+    case 'completed': return '已完成'
+    case 'cannot_understand': return '看不懂'
+    case 'cannot_find': return '找不到入口'
+    default: return ''
+  }
 }
 
 onMounted(fetchCards)
@@ -171,13 +299,13 @@ onMounted(fetchCards)
     </div>
 
     <div v-if="viewingCard" class="modal-overlay" @click.self="closeCard">
-      <div class="modal-content detail-modal">
+      <div :class="['modal-content detail-modal', { 'practice-modal': isPracticeMode }]">
         <div class="modal-header">
           <div class="detail-modal-title">
             <span class="detail-icon">{{ typeIcons[viewingCard.problem_type] || '❓' }}</span>
             <div>
-              <h3>{{ viewingCard.title }}</h3>
-              <div class="detail-sub">
+              <h3>{{ isPracticeMode ? '📝 适老化练习模式' : viewingCard.title }}</h3>
+              <div class="detail-sub" v-if="!isPracticeMode">
                 <span class="tag">{{ viewingCard.problem_type }}</span>
                 <span v-if="viewingCard.device_brand" class="tag">{{ viewingCard.device_brand }}</span>
                 <span v-if="viewingCard.system_version" class="tag">{{ viewingCard.system_version }}</span>
@@ -185,45 +313,196 @@ onMounted(fetchCards)
                   {{ difficultyLabel(viewingCard.difficulty) }}
                 </span>
               </div>
+              <div class="detail-sub" v-else>
+                <span class="tag">{{ viewingCard.title }}</span>
+                <span class="tag">共 {{ sortedSteps.length }} 步</span>
+              </div>
             </div>
           </div>
           <button class="modal-close" @click="closeCard">×</button>
         </div>
 
         <div class="modal-body">
-          <div class="detail-desc">
-            <h4>场景描述</h4>
-            <p>{{ viewingCard.description || '暂无详细描述' }}</p>
-          </div>
-
-          <div class="detail-steps">
-            <h4 v-if="viewingCard.steps.length > 0">📋 操作步骤（共 {{ viewingCard.steps.length }} 步）</h4>
-            <div v-if="viewingCard.steps.length === 0" class="empty-steps">
-              <div class="empty-steps-icon">⚠️</div>
-              <div class="empty-steps-text">该方案暂无操作步骤</div>
-              <div class="empty-steps-hint">请前往「步骤卡整理」页面补充完善</div>
+          <div v-if="!isPracticeMode">
+            <div class="detail-desc">
+              <h4>场景描述</h4>
+              <p>{{ viewingCard.description || '暂无详细描述' }}</p>
             </div>
-            <div
-              v-else
-              v-for="step in [...viewingCard.steps].sort((a, b) => a.step_number - b.step_number)"
-              :key="step.id"
-              class="step-item large-step"
-            >
-              <div class="step-number">{{ step.step_number }}</div>
-              <div class="step-content">
-                <div class="step-text">{{ step.content }}</div>
-                <div v-if="step.tip" class="tip-box">💡 小提示：{{ step.tip }}</div>
+
+            <div class="detail-steps">
+              <h4 v-if="viewingCard.steps.length > 0">📋 操作步骤（共 {{ viewingCard.steps.length }} 步）</h4>
+              <div v-if="viewingCard.steps.length === 0" class="empty-steps">
+                <div class="empty-steps-icon">⚠️</div>
+                <div class="empty-steps-text">该方案暂无操作步骤</div>
+                <div class="empty-steps-hint">请前往「步骤卡整理」页面补充完善</div>
+              </div>
+              <div
+                v-else
+                v-for="step in sortedSteps"
+                :key="step.id"
+                class="step-item large-step"
+              >
+                <div class="step-number">{{ step.step_number }}</div>
+                <div class="step-content">
+                  <div class="step-text">{{ step.content }}</div>
+                  <div v-if="step.tip" class="tip-box">💡 小提示：{{ step.tip }}</div>
+                </div>
               </div>
             </div>
+
+            <div class="detail-usage">
+              👆 该方案已被使用 <strong>{{ viewingCard.usage_count }}</strong> 次
+            </div>
           </div>
 
-          <div class="detail-usage">
-            👆 该方案已被使用 <strong>{{ viewingCard.usage_count }}</strong> 次
+          <div v-else-if="!practiceCompleted">
+            <div class="practice-tip-banner">
+              <div class="practice-tip-icon">👴</div>
+              <div>
+                <div class="practice-tip-title">大字版练习模式</div>
+                <div class="practice-tip-desc">请跟着步骤操作，每完成一步勾选一下</div>
+              </div>
+            </div>
+
+            <div class="practice-steps">
+              <div
+                v-for="step in sortedSteps"
+                :key="step.id"
+                :class="['practice-step-item', { 
+                  'step-completed': getStepStatus(step.id) === 'completed',
+                  'step-stuck': getStepStatus(step.id) === 'cannot_understand' || getStepStatus(step.id) === 'cannot_find'
+                }]"
+              >
+                <div class="practice-step-header">
+                  <div class="practice-step-num">{{ step.step_number }}</div>
+                  <div class="practice-step-text">{{ step.content }}</div>
+                </div>
+                <div v-if="step.tip" class="practice-step-tip">💡 {{ step.tip }}</div>
+                <div class="practice-step-actions">
+                  <button
+                    :class="['practice-btn', 'practice-btn-success', { active: getStepStatus(step.id) === 'completed' }]"
+                    @click="setStepStatus(step.id, step.step_number, 'completed')"
+                  >
+                    ✅ 已完成
+                  </button>
+                  <button
+                    :class="['practice-btn', 'practice-btn-warning', { active: getStepStatus(step.id) === 'cannot_understand' }]"
+                    @click="setStepStatus(step.id, step.step_number, 'cannot_understand')"
+                  >
+                    🤔 看不懂
+                  </button>
+                  <button
+                    :class="['practice-btn', 'practice-btn-danger', { active: getStepStatus(step.id) === 'cannot_find' }]"
+                    @click="setStepStatus(step.id, step.step_number, 'cannot_find')"
+                  >
+                    🔍 找不到入口
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="practice-feedback-section">
+              <h4 class="practice-section-title">📝 有什么困难想告诉家人？</h4>
+              <textarea
+                v-model="practiceFeedback"
+                class="practice-textarea"
+                placeholder="例如：第三步的按钮在哪里？我找了半天没找到..."
+                rows="3"
+              ></textarea>
+            </div>
+          </div>
+
+          <div v-else class="practice-result">
+            <div class="result-icon">
+              {{ allStepsCompleted ? '🎉' : '💪' }}
+            </div>
+            <h3 class="result-title">
+              {{ allStepsCompleted ? '太棒了！全部完成！' : '练习记录已保存' }}
+            </h3>
+            <p class="result-desc">
+              {{ allStepsCompleted 
+                ? '您已经可以独立完成这个操作了，真厉害！' 
+                : '别灰心，家人看到您的练习记录后会帮您优化步骤的。' }}
+            </p>
+            <div class="result-stats">
+              <div class="result-stat">
+                <div class="result-stat-value">{{ sortedSteps.length }}</div>
+                <div class="result-stat-label">总步骤数</div>
+              </div>
+              <div class="result-stat">
+                <div class="result-stat-value text-green">
+                  {{ Array.from(stepFeedbacks.values()).filter(s => s === 'completed').length }}
+                </div>
+                <div class="result-stat-label">已完成</div>
+              </div>
+              <div class="result-stat">
+                <div class="result-stat-value text-orange">
+                  {{ Array.from(stepFeedbacks.values()).filter(s => s !== 'completed').length }}
+                </div>
+                <div class="result-stat-label">有困难</div>
+              </div>
+            </div>
+            <div v-if="!allStepsCompleted && stuckStepNumber" class="result-stuck">
+              ⚠️ 卡在第 <strong>{{ stuckStepNumber }}</strong> 步
+            </div>
           </div>
         </div>
 
         <div class="modal-footer">
-          <button class="btn btn-primary btn-lg" @click="closeCard">我明白了，问题已解决</button>
+          <template v-if="!isPracticeMode">
+            <button class="btn btn-secondary btn-lg" @click="closeCard">返回</button>
+            <button class="btn btn-success btn-lg" @click="startPractice">
+              📝 开始练习
+            </button>
+            <button class="btn btn-primary btn-lg" @click="closeCard">我明白了，问题已解决</button>
+          </template>
+          <template v-else-if="!practiceCompleted">
+            <button class="btn btn-secondary btn-lg" @click="isPracticeMode = false">
+              返回查看
+            </button>
+            <button class="btn btn-warning btn-lg" @click="openConvertToHelp">
+              📞 求助家人
+            </button>
+            <button class="btn btn-primary btn-lg" @click="completePractice">
+              ✅ 完成练习
+            </button>
+          </template>
+          <template v-else>
+            <button class="btn btn-secondary btn-lg" @click="closeCard">关闭</button>
+            <button v-if="!allStepsCompleted" class="btn btn-warning btn-lg" @click="openConvertToHelp">
+              📞 还是需要求助
+            </button>
+            <button class="btn btn-primary btn-lg" @click="closeCard">
+              {{ allStepsCompleted ? '完成' : '好的' }}
+            </button>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showHelpConvertModal" class="modal-overlay" @click.self="showHelpConvertModal = false">
+      <div class="modal-content" style="max-width: 480px;">
+        <div class="modal-header">
+          <h3>📞 发起求助</h3>
+          <button class="modal-close" @click="showHelpConvertModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">问题描述</label>
+            <textarea
+              v-model="helpDescription"
+              class="form-textarea"
+              rows="4"
+              placeholder="请描述您遇到的问题..."
+            ></textarea>
+          </div>
+          <p class="text-sm text-muted mt-3">
+            家人会收到您的练习记录和问题描述，很快就会联系您。
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showHelpConvertModal = false">取消</button>
+          <button class="btn btn-primary" @click="convertToHelp">确认发起求助</button>
         </div>
       </div>
     </div>
@@ -535,5 +814,229 @@ onMounted(fetchCards)
   border-top: 1px solid #e2e8f0;
   display: flex;
   justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.practice-modal {
+  max-width: 720px !important;
+}
+
+.practice-tip-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-radius: 14px;
+  margin-bottom: 20px;
+}
+
+.practice-tip-icon {
+  font-size: 42px;
+}
+
+.practice-tip-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #92400e;
+  margin-bottom: 2px;
+}
+
+.practice-tip-desc {
+  font-size: 14px;
+  color: #b45309;
+}
+
+.practice-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.practice-step-item {
+  padding: 20px;
+  background: #f8fafc;
+  border: 2px solid #e2e8f0;
+  border-radius: 16px;
+  transition: all 0.2s;
+}
+
+.practice-step-item.step-completed {
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+
+.practice-step-item.step-stuck {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+.practice-step-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.practice-step-num {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.practice-step-text {
+  flex: 1;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+  line-height: 1.6;
+  padding-top: 8px;
+}
+
+.practice-step-tip {
+  margin-left: 62px;
+  padding: 10px 14px;
+  background: #fef9c3;
+  border-radius: 10px;
+  font-size: 15px;
+  color: #854d0e;
+  margin-bottom: 14px;
+}
+
+.practice-step-actions {
+  display: flex;
+  gap: 10px;
+  margin-left: 62px;
+  flex-wrap: wrap;
+}
+
+.practice-btn {
+  flex: 1;
+  min-width: 100px;
+  padding: 12px 16px;
+  border: 2px solid #e2e8f0;
+  background: white;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #475569;
+}
+
+.practice-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.practice-btn.active {
+  color: white;
+  border-color: transparent;
+}
+
+.practice-btn-success.active {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+
+.practice-btn-warning.active {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
+
+.practice-btn-danger.active {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+.practice-feedback-section {
+  padding-top: 20px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.practice-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 12px;
+}
+
+.practice-textarea {
+  width: 100%;
+  padding: 14px;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  font-size: 15px;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.practice-textarea:focus {
+  border-color: #667eea;
+}
+
+.practice-result {
+  text-align: center;
+  padding: 20px 0;
+}
+
+.result-icon {
+  font-size: 72px;
+  margin-bottom: 16px;
+}
+
+.result-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 8px;
+}
+
+.result-desc {
+  font-size: 15px;
+  color: #64748b;
+  margin-bottom: 24px;
+}
+
+.result-stats {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  margin-bottom: 20px;
+}
+
+.result-stat {
+  text-align: center;
+}
+
+.result-stat-value {
+  font-size: 36px;
+  font-weight: 800;
+  color: #1e293b;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.result-stat-label {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.result-stuck {
+  display: inline-block;
+  padding: 10px 20px;
+  background: #fef2f2;
+  color: #dc2626;
+  border-radius: 10px;
+  font-size: 15px;
 }
 </style>

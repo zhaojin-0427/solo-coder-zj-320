@@ -69,3 +69,35 @@ class StepCardStep(db.Model):
     content = db.Column(db.Text, nullable=False)
     tip = db.Column(db.Text)
     image_url = db.Column(db.String(500))
+
+class PracticeRecord(db.Model):
+    __tablename__ = 'practice_records'
+    id = db.Column(db.Integer, primary_key=True)
+    step_card_id = db.Column(db.Integer, db.ForeignKey('step_cards.id'), nullable=False)
+    practitioner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    source = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), default='in_progress')
+    is_independent = db.Column(db.Boolean, default=False)
+    stuck_step_number = db.Column(db.Integer)
+    feedback = db.Column(db.Text)
+    converted_to_help = db.Column(db.Boolean, default=False)
+    help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+
+    step_card = db.relationship('StepCard', backref='practice_records')
+    practitioner = db.relationship('User', foreign_keys=[practitioner_id])
+    help_request = db.relationship('HelpRequest', foreign_keys=[help_request_id])
+    step_feedbacks = db.relationship('PracticeStepFeedback', backref='practice_record', cascade='all, delete-orphan')
+
+class PracticeStepFeedback(db.Model):
+    __tablename__ = 'practice_step_feedbacks'
+    id = db.Column(db.Integer, primary_key=True)
+    practice_record_id = db.Column(db.Integer, db.ForeignKey('practice_records.id'), nullable=False)
+    step_card_step_id = db.Column(db.Integer, db.ForeignKey('step_card_steps.id'), nullable=False)
+    step_number = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(20), nullable=False)
+    feedback = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    step_card_step = db.relationship('StepCardStep')

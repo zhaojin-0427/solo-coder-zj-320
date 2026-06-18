@@ -27,9 +27,12 @@ use([
   ToolboxComponent
 ])
 
+import type { PracticeStats } from '@/types'
+
 const overview = ref<StatsOverview | null>(null)
 const recentHelps = ref<HelpRequest[]>([])
 const timeline = ref<{ date: string; count: number }[]>([])
+const practiceStats = ref<PracticeStats | null>(null)
 
 const typeColors = {
   '看不清字': '#667eea',
@@ -164,6 +167,35 @@ const independentRateOption = computed(() => ({
   ]
 }))
 
+const practiceCompletionRateOption = computed(() => ({
+  series: [
+    {
+      type: 'gauge',
+      startAngle: 200,
+      endAngle: -20,
+      min: 0,
+      max: 100,
+      progress: { show: true, width: 18, itemStyle: { color: '#8b5cf6' } },
+      axisLine: { lineStyle: { width: 18, color: [[1, '#e2e8f0']] } },
+      axisTick: { show: false },
+      splitLine: { show: false },
+      axisLabel: { show: false },
+      pointer: { show: false },
+      anchor: { show: false },
+      title: { show: false },
+      detail: {
+        valueAnimation: true,
+        offsetCenter: [0, '0%'],
+        fontSize: 36,
+        fontWeight: 'bold',
+        formatter: '{value}%',
+        color: '#8b5cf6'
+      },
+      data: [{ value: practiceStats.value?.completion_rate_percent || 0 }]
+    }
+  ]
+}))
+
 const timelineOption = computed(() => {
   const data = timeline.value || []
   return {
@@ -210,6 +242,7 @@ const fetchData = async () => {
   overview.value = await statsApi.overview()
   recentHelps.value = (await helpApi.list()).slice(0, 6)
   timeline.value = await statsApi.timeline()
+  practiceStats.value = await statsApi.practice()
 }
 
 const formatTime = (t?: string) => {
@@ -334,6 +367,110 @@ onMounted(fetchData)
             <div class="empty-state-icon">📭</div>
             <div>暂无求助记录</div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="practice-stats-section">
+      <h3 class="section-title mb-4">📝 练习数据统计</h3>
+      <div class="grid grid-3">
+        <div class="card">
+          <h3 class="section-title mb-4">✅ 练习完成率</h3>
+          <VChart :option="practiceCompletionRateOption" style="height: 260px" autoresize />
+          <div class="gauge-desc">
+            老人通过自主练习完成的比例
+          </div>
+          <div class="practice-numbers">
+            <div class="practice-num-item">
+              <span class="practice-num-value">{{ practiceStats?.total_practices || 0 }}</span>
+              <span class="practice-num-label">总练习次数</span>
+            </div>
+            <div class="practice-num-item">
+              <span class="practice-num-value text-green">{{ practiceStats?.completed_practices || 0 }}</span>
+              <span class="practice-num-label">已完成</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title mb-4">⚠️ 卡住步骤 Top 5</h3>
+          <div class="stuck-steps-list">
+            <div
+              v-for="(item, index) in practiceStats?.top_stuck_steps || []"
+              :key="index"
+              class="stuck-step-item"
+            >
+              <div class="stuck-step-rank">{{ index + 1 }}</div>
+              <div class="stuck-step-info">
+                <div class="stuck-step-title">{{ item.card_title }}</div>
+                <div class="stuck-step-detail">第 {{ item.step_number }} 步</div>
+              </div>
+              <div class="stuck-step-count">
+                <span class="count-num">{{ item.stuck_count }}</span>
+                <span class="count-label">次</span>
+              </div>
+            </div>
+            <div v-if="!practiceStats?.top_stuck_steps?.length" class="empty-state" style="padding: 40px;">
+              <div class="empty-state-icon">📊</div>
+              <div>暂无卡住步骤数据</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="section-title mb-4">🔄 练习转求助</h3>
+          <div class="convert-stats">
+            <div class="convert-main">
+              <div class="convert-icon">📞</div>
+              <div class="convert-number">{{ practiceStats?.converted_to_help_count || 0 }}</div>
+              <div class="convert-label">从练习转求助次数</div>
+            </div>
+            <div class="convert-desc">
+              <p>当老人在练习中遇到困难时，可以一键发起求助，家人能看到详细的练习记录和卡住的步骤。</p>
+            </div>
+            <div class="convert-rate">
+              <div class="rate-label">转求助比例</div>
+              <div class="rate-bar">
+                <div
+                  class="rate-fill"
+                  :style="{ width: practiceStats && practiceStats.total_practices > 0
+                    ? (practiceStats.converted_to_help_count / practiceStats.total_practices * 100) + '%'
+                    : '0%' }"
+                ></div>
+              </div>
+              <div class="rate-value">
+                {{ practiceStats && practiceStats.total_practices > 0
+                  ? (practiceStats.converted_to_help_count / practiceStats.total_practices * 100).toFixed(1)
+                  : 0 }}%
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt-6">
+      <h3 class="section-title mb-4">🏆 练习最多的步骤卡</h3>
+      <div class="top-practiced-list">
+        <div
+          v-for="(item, index) in practiceStats?.top_practiced_cards || []"
+          :key="item.id"
+          class="top-practiced-item"
+        >
+          <div :class="['top-practiced-rank', { 'rank-1': index === 0, 'rank-2': index === 1, 'rank-3': index === 2 }]">
+            {{ index + 1 }}
+          </div>
+          <div class="top-practiced-info">
+            <div class="top-practiced-title">{{ item.title }}</div>
+          </div>
+          <div class="top-practiced-count">
+            <span class="count-num">{{ item.practice_count }}</span>
+            <span class="count-label">次练习</span>
+          </div>
+        </div>
+        <div v-if="!practiceStats?.top_practiced_cards?.length" class="empty-state" style="padding: 30px;">
+          <div class="empty-state-icon">🏆</div>
+          <div>暂无练习数据</div>
         </div>
       </div>
     </div>
@@ -492,5 +629,265 @@ onMounted(fetchData)
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
+}
+
+.practice-stats-section {
+  margin-top: 20px;
+}
+
+.practice-numbers {
+  display: flex;
+  justify-content: space-around;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
+  margin-top: 8px;
+}
+
+.practice-num-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.practice-num-value {
+  font-size: 22px;
+  font-weight: 800;
+  color: #1e293b;
+}
+
+.practice-num-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.stuck-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stuck-step-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border-radius: 12px;
+  transition: all 0.2s;
+}
+
+.stuck-step-item:hover {
+  background: #f1f5f9;
+}
+
+.stuck-step-rank {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.stuck-step-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.stuck-step-title {
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 14px;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stuck-step-detail {
+  font-size: 12px;
+  color: #ef4444;
+}
+
+.stuck-step-count {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.stuck-step-count .count-num {
+  font-size: 20px;
+  font-weight: 800;
+  color: #ef4444;
+}
+
+.stuck-step-count .count-label {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-left: 2px;
+}
+
+.convert-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.convert-main {
+  text-align: center;
+  padding: 20px 0;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-radius: 16px;
+}
+
+.convert-icon {
+  font-size: 40px;
+  margin-bottom: 8px;
+}
+
+.convert-number {
+  font-size: 42px;
+  font-weight: 800;
+  color: #92400e;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.convert-label {
+  font-size: 14px;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.convert-desc {
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.convert-rate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rate-label {
+  font-size: 13px;
+  color: #475569;
+  font-weight: 600;
+}
+
+.rate-bar {
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.rate-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f59e0b 0%, #ef4444 100%);
+  border-radius: 5px;
+  transition: width 0.3s;
+}
+
+.rate-value {
+  font-size: 13px;
+  color: #64748b;
+  text-align: right;
+}
+
+.top-practiced-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.top-practiced-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: #f8fafc;
+  border-radius: 14px;
+  transition: all 0.2s;
+}
+
+.top-practiced-item:hover {
+  background: #f1f5f9;
+  transform: translateX(4px);
+}
+
+.top-practiced-rank {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  background: #e2e8f0;
+  color: #64748b;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 16px;
+}
+
+.top-practiced-rank.rank-1 {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #92400e;
+}
+
+.top-practiced-rank.rank-2 {
+  background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+  color: #4338ca;
+}
+
+.top-practiced-rank.rank-3 {
+  background: linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%);
+  color: #be185d;
+}
+
+.top-practiced-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.top-practiced-title {
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.top-practiced-count {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.top-practiced-count .count-num {
+  font-size: 22px;
+  font-weight: 800;
+  color: #8b5cf6;
+}
+
+.top-practiced-count .count-label {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-left: 4px;
+}
+
+.mt-6 {
+  margin-top: 24px;
+}
+
+.text-green {
+  color: #16a34a;
 }
 </style>

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from app import db
-from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep
+from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback
 
 def seed_data():
     if User.query.count() > 0:
@@ -80,5 +80,52 @@ def seed_data():
                 tip=f'第{j}步的小贴士'
             )
             db.session.add(g)
+
+    practice_data = [
+        (sc1.id, u1.id, 'library', 'completed', True, None, 1, 5, ['completed', 'completed', 'completed', 'completed', 'completed']),
+        (sc1.id, u3.id, 'library', 'completed', True, None, 0, 4, ['completed', 'completed', 'completed', 'completed', 'completed']),
+        (sc1.id, u1.id, 'help_success', 'completed', False, 4, 1, 3, ['completed', 'completed', 'completed', 'cannot_understand', 'completed']),
+        (sc3.id, u1.id, 'library', 'completed', True, None, 0, 6, ['completed', 'completed', 'completed', 'completed']),
+        (sc3.id, u3.id, 'library', 'completed', False, 3, 2, 5, ['completed', 'completed', 'cannot_find', 'completed']),
+        (sc3.id, u1.id, 'help_success', 'converted', False, 2, 3, 2, ['completed', 'cannot_understand', 'cannot_find', 'cannot_find']),
+        (sc4.id, u3.id, 'library', 'completed', True, None, 0, 7, ['completed', 'completed', 'completed']),
+        (sc4.id, u1.id, 'library', 'completed', False, 3, 1, 8, ['completed', 'completed', 'cannot_find']),
+        (sc1.id, u3.id, 'library', 'completed', True, None, 0, 9, ['completed', 'completed', 'completed', 'completed', 'completed']),
+        (sc3.id, u3.id, 'library', 'completed', True, None, 0, 10, ['completed', 'completed', 'completed', 'completed']),
+    ]
+
+    for sc_id, prac_id, source, status, is_indep, stuck_step, converted_idx, days_ago, step_statuses in practice_data:
+        created = now - timedelta(days=days_ago, hours=10)
+        completed = created + timedelta(minutes=5 + days_ago) if status != 'converted' else None
+
+        p = PracticeRecord(
+            step_card_id=sc_id,
+            practitioner_id=prac_id,
+            source=source,
+            status=status,
+            is_independent=is_indep,
+            stuck_step_number=stuck_step,
+            feedback='步骤写得很清楚，就是第三步找了半天' if stuck_step and stuck_step == 3 else None,
+            converted_to_help=(status == 'converted'),
+            help_request_id=helps[converted_idx].id if status == 'converted' else None,
+            created_at=created,
+            completed_at=completed
+        )
+        db.session.add(p)
+        db.session.flush()
+
+        for idx, step_status in enumerate(step_statuses):
+            step_num = idx + 1
+            step = StepCardStep.query.filter_by(step_card_id=sc_id, step_number=step_num).first()
+            if step:
+                psf = PracticeStepFeedback(
+                    practice_record_id=p.id,
+                    step_card_step_id=step.id,
+                    step_number=step_num,
+                    status=step_status,
+                    feedback='这里写得有点不清楚' if step_status == 'cannot_understand' else '找不到这个按钮在哪里' if step_status == 'cannot_find' else None,
+                    created_at=created + timedelta(minutes=idx)
+                )
+                db.session.add(psf)
 
     db.session.commit()

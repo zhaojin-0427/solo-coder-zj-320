@@ -74,6 +74,57 @@ export interface StatsOverview {
   independent_rate_percent: number
 }
 
+export interface PracticeStepFeedback {
+  id: number
+  practice_record_id: number
+  step_card_step_id: number
+  step_number: number
+  status: 'completed' | 'cannot_understand' | 'cannot_find'
+  feedback?: string
+  step_content?: string
+  created_at?: string
+}
+
+export interface PracticeRecord {
+  id: number
+  step_card_id: number
+  practitioner_id: number
+  practitioner?: User
+  source: 'library' | 'help_success'
+  status: 'in_progress' | 'completed' | 'converted'
+  is_independent: boolean
+  stuck_step_number?: number
+  feedback?: string
+  converted_to_help: boolean
+  help_request_id?: number
+  step_card?: StepCard
+  step_feedbacks: PracticeStepFeedback[]
+  created_at?: string
+  completed_at?: string
+}
+
+export interface CardPracticeStats {
+  step_card_id: number
+  total_practice_count: number
+  recent_practice_count: number
+  completion_count: number
+  completion_rate_percent: number
+  most_stuck_step?: { step_number: number; stuck_count: number }
+  stuck_steps_detail: { step_number: number; stuck_count: number }[]
+  needs_optimization: boolean
+  independent_count: number
+  converted_to_help_count: number
+}
+
+export interface PracticeStats {
+  total_practices: number
+  completed_practices: number
+  completion_rate_percent: number
+  converted_to_help_count: number
+  top_stuck_steps: { step_number: number; card_title: string; stuck_count: number }[]
+  top_practiced_cards: { id: number; title: string; practice_count: number }[]
+}
+
 export const PROBLEM_TYPES = [
   '看不清字',
   '找不到入口',

@@ -1,12 +1,13 @@
 from flask import Blueprint, request, jsonify
 from datetime import datetime
 from app import db
-from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep
+from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback
 
 help_bp = Blueprint('help', __name__)
 stepcard_bp = Blueprint('stepcard', __name__)
 stats_bp = Blueprint('stats', __name__)
 user_bp = Blueprint('user', __name__)
+practice_bp = Blueprint('practice', __name__)
 
 def serialize_user(u):
     return {'id': u.id, 'name': u.name, 'role': u.role, 'avatar': u.avatar, 'phone': u.phone}
@@ -51,6 +52,37 @@ def serialize_step(st):
         'id': st.id, 'step_card_id': st.step_card_id,
         'step_number': st.step_number, 'content': st.content,
         'tip': st.tip, 'image_url': st.image_url
+    }
+
+def serialize_practice_step_feedback(psf):
+    return {
+        'id': psf.id,
+        'practice_record_id': psf.practice_record_id,
+        'step_card_step_id': psf.step_card_step_id,
+        'step_number': psf.step_number,
+        'status': psf.status,
+        'feedback': psf.feedback,
+        'step_content': psf.step_card_step.content if psf.step_card_step else None,
+        'created_at': psf.created_at.isoformat() if psf.created_at else None
+    }
+
+def serialize_practice_record(pr):
+    return {
+        'id': pr.id,
+        'step_card_id': pr.step_card_id,
+        'practitioner_id': pr.practitioner_id,
+        'practitioner': serialize_user(pr.practitioner) if pr.practitioner else None,
+        'source': pr.source,
+        'status': pr.status,
+        'is_independent': pr.is_independent,
+        'stuck_step_number': pr.stuck_step_number,
+        'feedback': pr.feedback,
+        'converted_to_help': pr.converted_to_help,
+        'help_request_id': pr.help_request_id,
+        'step_card': serialize_stepcard(pr.step_card) if pr.step_card else None,
+        'step_feedbacks': [serialize_practice_step_feedback(f) for f in pr.step_feedbacks],
+        'created_at': pr.created_at.isoformat() if pr.created_at else None,
+        'completed_at': pr.completed_at.isoformat() if pr.completed_at else None
     }
 
 @user_bp.route('/', methods=['GET'])
@@ -238,3 +270,225 @@ def stats_timeline():
         func.count(HelpRequest.id).label('count')
     ).group_by(func.date(HelpRequest.created_at)).order_by('date').all()
     return jsonify([{'date': str(d), 'count': c} for d, c in result])
+
+@stats_bp.route('/practice', methods=['GET'])
+def stats_practice():
+    from sqlalchemy import func, desc
+
+    total_practices = PracticeRecord.query.count()
+    completed_practices = PracticeRecord.query.filter_by(status='completed').count()
+    completion_rate = (completed_practices / total_practices * 100) if total_practices else 0
+
+    converted_count = PracticeRecord.query.filter_by(converted_to_help=True).count()
+
+    step_stuck_counts = db.session.query(
+        PracticeStepFeedback.step_number,
+        StepCard.title,
+        func.count(PracticeStepFeedback.id).label('stuck_count')
+    ).join(
+        PracticeRecord, PracticeStepFeedback.practice_record_id == PracticeRecord.id
+    ).join(
+        StepCard, PracticeRecord.step_card_id == StepCard.id
+    ).filter(
+        PracticeStepFeedback.status.in_(['cannot_understand', 'cannot_find'])
+    ).group_by(
+        PracticeStepFeedback.step_number, StepCard.title
+    ).order_by(desc('stuck_count')).limit(5).all()
+
+    stuck_steps = [
+        {
+            'step_number': s,
+            'card_title': t,
+            'stuck_count': c
+        } for s, t, c in step_stuck_counts
+    ]
+
+    card_practice_counts = db.session.query(
+        StepCard.id,
+        StepCard.title,
+        func.count(PracticeRecord.id).label('practice_count')
+    ).join(
+        PracticeRecord, StepCard.id == PracticeRecord.step_card_id
+    ).group_by(StepCard.id, StepCard.title).order_by(desc('practice_count')).limit(5).all()
+
+    top_practiced_cards = [
+        {'id': cid, 'title': t, 'practice_count': pc}
+        for cid, t, pc in card_practice_counts
+    ]
+
+    return jsonify({
+        'total_practices': total_practices,
+        'completed_practices': completed_practices,
+        'completion_rate_percent': round(completion_rate, 1),
+        'converted_to_help_count': converted_count,
+        'top_stuck_steps': stuck_steps,
+        'top_practiced_cards': top_practiced_cards
+    })
+
+@practice_bp.route('/', methods=['GET'])
+def list_practices():
+    step_card_id = request.args.get('step_card_id', type=int)
+    practitioner_id = request.args.get('practitioner_id', type=int)
+    status = request.args.get('status')
+
+    query = PracticeRecord.query.order_by(PracticeRecord.created_at.desc())
+    if step_card_id:
+        query = query.filter_by(step_card_id=step_card_id)
+    if practitioner_id:
+        query = query.filter_by(practitioner_id=practitioner_id)
+    if status:
+        query = query.filter_by(status=status)
+
+    practices = query.all()
+    return jsonify([serialize_practice_record(p) for p in practices])
+
+@practice_bp.route('/<int:id>', methods=['GET'])
+def get_practice(id):
+    p = PracticeRecord.query.get_or_404(id)
+    return jsonify(serialize_practice_record(p))
+
+@practice_bp.route('/', methods=['POST'])
+def create_practice():
+    data = request.json
+    p = PracticeRecord(
+        step_card_id=data['step_card_id'],
+        practitioner_id=data.get('practitioner_id', 1),
+        source=data.get('source', 'library'),
+        status='in_progress'
+    )
+    db.session.add(p)
+    db.session.commit()
+    return jsonify(serialize_practice_record(p)), 201
+
+@practice_bp.route('/<int:id>/step_feedback', methods=['POST'])
+def add_step_feedback(id):
+    data = request.json
+    p = PracticeRecord.query.get_or_404(id)
+
+    existing = PracticeStepFeedback.query.filter_by(
+        practice_record_id=id,
+        step_card_step_id=data['step_card_step_id']
+    ).first()
+
+    if existing:
+        existing.status = data['status']
+        existing.feedback = data.get('feedback')
+        psf = existing
+    else:
+        psf = PracticeStepFeedback(
+            practice_record_id=id,
+            step_card_step_id=data['step_card_step_id'],
+            step_number=data['step_number'],
+            status=data['status'],
+            feedback=data.get('feedback')
+        )
+        db.session.add(psf)
+
+    if data['status'] in ['cannot_understand', 'cannot_find']:
+        p.stuck_step_number = data['step_number']
+
+    db.session.commit()
+    return jsonify(serialize_practice_step_feedback(psf)), 201
+
+@practice_bp.route('/<int:id>/complete', methods=['POST'])
+def complete_practice(id):
+    data = request.json
+    p = PracticeRecord.query.get_or_404(id)
+    p.status = 'completed'
+    p.completed_at = datetime.utcnow()
+    p.feedback = data.get('feedback')
+    p.is_independent = data.get('is_independent', True)
+    p.stuck_step_number = data.get('stuck_step_number')
+    db.session.commit()
+    return jsonify(serialize_practice_record(p))
+
+@practice_bp.route('/<int:id>/convert_to_help', methods=['POST'])
+def convert_to_help(id):
+    data = request.json
+    p = PracticeRecord.query.get_or_404(id)
+
+    h = HelpRequest(
+        title=f'练习卡住：{p.step_card.title}' if p.step_card else '练习卡住求助',
+        problem_type=p.step_card.problem_type if p.step_card else '其他问题',
+        description=data.get('description') or p.feedback or '练习时遇到困难，需要帮助',
+        device_brand=p.step_card.device_brand if p.step_card else None,
+        system_version=p.step_card.system_version if p.step_card else None,
+        requester_id=p.practitioner_id,
+        is_repeat=True
+    )
+    db.session.add(h)
+    db.session.flush()
+
+    p.converted_to_help = True
+    p.help_request_id = h.id
+    p.status = 'converted'
+    db.session.commit()
+
+    return jsonify(serialize_practice_record(p))
+
+@practice_bp.route('/card_stats/<int:card_id>', methods=['GET'])
+def get_card_practice_stats(card_id):
+    from sqlalchemy import func, desc
+
+    practices = PracticeRecord.query.filter_by(step_card_id=card_id).all()
+    total = len(practices)
+    completed = len([p for p in practices if p.status == 'completed'])
+    completion_rate = (completed / total * 100) if total else 0
+
+    step_stuck_counts = db.session.query(
+        PracticeStepFeedback.step_number,
+        func.count(PracticeStepFeedback.id).label('stuck_count')
+    ).join(
+        PracticeRecord, PracticeStepFeedback.practice_record_id == PracticeRecord.id
+    ).filter(
+        PracticeRecord.step_card_id == card_id,
+        PracticeStepFeedback.status.in_(['cannot_understand', 'cannot_find'])
+    ).group_by(
+        PracticeStepFeedback.step_number
+    ).order_by(desc('stuck_count')).all()
+
+    stuck_steps = [{'step_number': s, 'stuck_count': c} for s, c in step_stuck_counts]
+    most_stuck_step = stuck_steps[0] if stuck_steps else None
+
+    needs_optimization = total >= 3 and (
+        completion_rate < 60 or
+        (most_stuck_step and most_stuck_step['stuck_count'] >= total * 0.5)
+    )
+
+    recent_practices = PracticeRecord.query.filter_by(
+        step_card_id=card_id
+    ).order_by(PracticeRecord.created_at.desc()).limit(10).all()
+
+    return jsonify({
+        'step_card_id': card_id,
+        'total_practice_count': total,
+        'recent_practice_count': len(recent_practices),
+        'completion_count': completed,
+        'completion_rate_percent': round(completion_rate, 1),
+        'most_stuck_step': most_stuck_step,
+        'stuck_steps_detail': stuck_steps,
+        'needs_optimization': needs_optimization,
+        'independent_count': len([p for p in practices if p.is_independent]),
+        'converted_to_help_count': len([p for p in practices if p.converted_to_help])
+    })
+
+@stepcard_bp.route('/<int:id>/add_tip', methods=['POST'])
+def add_step_tip(id):
+    data = request.json
+    step = StepCardStep.query.filter_by(
+        step_card_id=id,
+        step_number=data['step_number']
+    ).first()
+
+    if not step:
+        return jsonify({'error': 'Step not found'}), 404
+
+    existing_tip = step.tip or ''
+    new_tip = data.get('tip', '').strip()
+    if existing_tip and new_tip:
+        step.tip = f"{existing_tip}\n\n用户反馈补充：{new_tip}"
+    else:
+        step.tip = new_tip
+
+    db.session.commit()
+    return jsonify(serialize_step(step))
