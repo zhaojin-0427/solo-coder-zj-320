@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { HelpRequest, StepCard, User, StatsOverview, GuidanceRecord, PracticeRecord, PracticeStepFeedback, CardPracticeStats, PracticeStats, StepCardStep, DeviceProfile, DeviceStats, StepCardDeviceTip, FamilyEfficiency } from '@/types'
+import type { HelpRequest, StepCard, User, StatsOverview, GuidanceRecord, PracticeRecord, PracticeStepFeedback, CardPracticeStats, PracticeStats, StepCardStep, DeviceProfile, DeviceStats, StepCardDeviceTip, FamilyEfficiency, RiskStats } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -99,7 +99,8 @@ export const statsApi = {
   timeline: () => api.get<{ date: string; count: number }[]>('/stats/timeline').then(r => r.data),
   practice: () => api.get<PracticeStats>('/stats/practice').then(r => r.data),
   device: () => api.get<DeviceStats>('/stats/device').then(r => r.data),
-  familyEfficiency: () => api.get<FamilyEfficiency[]>('/stats/family_efficiency').then(r => r.data)
+  familyEfficiency: () => api.get<FamilyEfficiency[]>('/stats/family_efficiency').then(r => r.data),
+  risk: () => api.get<RiskStats>('/stats/risk').then(r => r.data)
 }
 
 export const deviceApi = {
@@ -112,4 +113,15 @@ export const deviceApi = {
     api.put<DeviceProfile>(`/device/profiles/${id}`, data).then(r => r.data),
   supplementProfile: (id: number, data: Partial<DeviceProfile>) =>
     api.post<DeviceProfile>(`/device/profiles/${id}/supplement`, data).then(r => r.data)
+}
+
+export const riskApi = {
+  addDisposal: (helpId: number, data: {
+    disposal_type: string
+    note?: string
+    operator_id?: number
+    create_step_card?: boolean
+  }) => api.post<HelpRequest>(`/risk/${helpId}/disposal`, data).then(r => r.data),
+  getDisposals: (helpId: number) =>
+    api.get(`/risk/${helpId}/disposals`).then(r => r.data)
 }

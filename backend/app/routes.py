@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 from app import db
-from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback, DeviceProfile, StepCardDeviceTip, HelpStatusLog, HelpAssignment
+from app.models import User, HelpRequest, GuidanceRecord, StepCard, StepCardStep, PracticeRecord, PracticeStepFeedback, DeviceProfile, StepCardDeviceTip, HelpStatusLog, HelpAssignment, FraudRiskInfo, RiskDisposal
 
 help_bp = Blueprint('help', __name__)
 stepcard_bp = Blueprint('stepcard', __name__)
@@ -10,6 +10,7 @@ user_bp = Blueprint('user', __name__)
 practice_bp = Blueprint('practice', __name__)
 device_bp = Blueprint('device', __name__)
 family_bp = Blueprint('family', __name__)
+risk_bp = Blueprint('risk', __name__)
 
 def serialize_user(u):
     return {
@@ -40,6 +41,9 @@ def serialize_help(h):
         'is_independent': h.is_independent, 'is_repeat': h.is_repeat,
         'transfer_count': h.transfer_count, 'is_timeout': h.is_timeout,
         'processing_note': h.processing_note, 'create_source': h.create_source,
+        'is_risk': h.is_risk, 'risk_level': h.risk_level,
+        'risk_info': serialize_risk_info(h.risk_info) if h.risk_info else None,
+        'risk_disposals': [serialize_risk_disposal(d) for d in h.risk_disposals],
         'guidance_records': [serialize_guidance(g) for g in h.guidance_records],
         'status_logs': [serialize_status_log(l) for l in h.status_logs],
         'assignments': [serialize_assignment(a) for a in h.assignments],
@@ -64,6 +68,27 @@ def serialize_assignment(a):
         'assignment_type': a.assignment_type, 'reason': a.reason,
         'match_score': a.match_score,
         'created_at': a.created_at.isoformat() if a.created_at else None
+    }
+
+def serialize_risk_info(r):
+    return {
+        'id': r.id, 'help_request_id': r.help_request_id,
+        'scam_type': r.scam_type, 'suspicious_source': r.suspicious_source,
+        'involved_amount': r.involved_amount,
+        'leaked_verification_code': r.leaked_verification_code,
+        'leaked_payment_password': r.leaked_payment_password,
+        'clicked_link': r.clicked_link,
+        'risk_keywords': r.risk_keywords,
+        'custom_description': r.custom_description,
+        'created_at': r.created_at.isoformat() if r.created_at else None
+    }
+
+def serialize_risk_disposal(d):
+    return {
+        'id': d.id, 'help_request_id': d.help_request_id,
+        'disposal_type': d.disposal_type, 'note': d.note,
+        'operator': serialize_user(d.operator) if d.operator else None,
+        'created_at': d.created_at.isoformat() if d.created_at else None
     }
 
 def serialize_guidance(g):
@@ -1074,6 +1099,20 @@ def create_from_help(help_id):
 @help_bp.route('/', methods=['POST'])
 def create_help():
     data = request.json
+    risk_data = data.get('risk_info')
+    is_risk = False
+    risk_level = None
+    if risk_data and risk_data.get('scam_type'):
+        is_risk = True
+        scam_type = risk_data.get('scam_type')
+        high_risk_types = ['要求转账', '索要验证码', '远程控制']
+        if scam_type in high_risk_types:
+            risk_level = 'high'
+        elif risk_data.get('involved_amount', 0) > 0 or risk_data.get('leaked_verification_code') or risk_data.get('leaked_payment_password'):
+            risk_level = 'high'
+        else:
+            risk_level = 'medium'
+
     h = HelpRequest(
         title=data['title'],
         problem_type=data['problem_type'],
@@ -1084,7 +1123,9 @@ def create_help():
         system_version=data.get('system_version'),
         requester_id=data.get('requester_id', 1),
         device_profile_id=data.get('device_profile_id'),
-        create_source=data.get('create_source', 'direct')
+        create_source=data.get('create_source', 'direct'),
+        is_risk=is_risk,
+        risk_level=risk_level
     )
     existing = StepCard.query.filter_by(problem_type=h.problem_type)
     if h.device_brand:
@@ -1102,9 +1143,23 @@ def create_help():
         h.is_repeat = True
     db.session.add(h)
     db.session.flush()
-    
-    add_status_log(h.id, h.requester_id, None, 'pending', None, None, '老人发起求助')
-    
+
+    if is_risk and risk_data:
+        ri = FraudRiskInfo(
+            help_request_id=h.id,
+            scam_type=risk_data.get('scam_type', ''),
+            suspicious_source=risk_data.get('suspicious_source'),
+            involved_amount=risk_data.get('involved_amount', 0),
+            leaked_verification_code=risk_data.get('leaked_verification_code', False),
+            leaked_payment_password=risk_data.get('leaked_payment_password', False),
+            clicked_link=risk_data.get('clicked_link', False),
+            risk_keywords=risk_data.get('risk_keywords'),
+            custom_description=risk_data.get('custom_description')
+        )
+        db.session.add(ri)
+
+    add_status_log(h.id, h.requester_id, None, 'pending', None, None, '老人发起求助' + ('【高风险】' if is_risk else ''))
+
     db.session.commit()
     return jsonify(serialize_help(h)), 201
 
@@ -1140,3 +1195,159 @@ def recommend_family_for_help(help_id):
         'score': s,
         'reason': f'在线:{u.is_online}, 值班:{u.is_on_duty}, 擅长:{u.expertise or "未设置"}'
     } for u, s in candidates])
+
+@risk_bp.route('/<int:help_id>/disposal', methods=['POST'])
+def add_risk_disposal(help_id):
+    h = HelpRequest.query.get_or_404(help_id)
+    data = request.json
+    disposal_type = data.get('disposal_type')
+    valid_types = ['已阻止', '需报警', '需冻结支付', '误报', '继续观察']
+    if disposal_type not in valid_types:
+        return jsonify({'error': '无效的处置类型'}), 400
+    d = RiskDisposal(
+        help_request_id=help_id,
+        disposal_type=disposal_type,
+        note=data.get('note'),
+        operator_id=data.get('operator_id', 2)
+    )
+    db.session.add(d)
+
+    if disposal_type in ['已阻止', '需报警', '需冻结支付']:
+        h.processing_note = (h.processing_note or '') + f'\n[{datetime.utcnow().strftime("%Y-%m-%d %H:%M")}] 风险处置：{disposal_type}'
+
+    if disposal_type == '已阻止':
+        h.status = 'resolved'
+        h.processing_status = 'resolved'
+        h.resolved_at = datetime.utcnow()
+        if h.created_at:
+            delta = h.resolved_at - h.created_at
+            h.resolution_duration = int(delta.total_seconds() // 60)
+        add_status_log(help_id, data.get('operator_id', 2), h.status, 'resolved', h.processing_status, 'resolved', f'风险处置：{disposal_type}')
+
+    if data.get('create_step_card'):
+        sc = StepCard(
+            title=f'防诈骗步骤卡-{h.risk_info.scam_type if h.risk_info else "未知"}',
+            problem_type='防诈骗',
+            difficulty='hard',
+            description=f'针对{h.risk_info.scam_type if h.risk_info else ""}诈骗的处置步骤',
+            created_by=data.get('operator_id', 2),
+            responsible_family_id=h.helper_id,
+            create_source='risk_disposal',
+            source_help_request_id=help_id
+        )
+        db.session.add(sc)
+        db.session.flush()
+        step_content_map = {
+            '已阻止': [
+                ('立即挂断电话或关闭网页', '不要与对方继续交流'),
+                ('确认资金安全', '检查银行账户和支付记录'),
+                ('告知家人并记录详情', '保存对方的号码、链接等信息'),
+                ('开启来电/短信拦截', '在手机设置中添加黑名单')
+            ],
+            '需报警': [
+                ('拨打110报警', '保留所有证据，不要删除短信和通话记录'),
+                ('提供诈骗信息', '告诉警方对方的电话号码、银行账号等'),
+                ('冻结相关账户', '联系银行冻结可能泄露的账户'),
+                ('通知亲友防范', '提醒家人和朋友注意同类诈骗')
+            ],
+            '需冻结支付': [
+                ('立即联系银行', '拨打银行卡背面的客服电话'),
+                ('冻结网银和支付功能', '要求银行暂时冻结网上支付功能'),
+                ('修改支付密码', '在安全环境下修改所有支付密码'),
+                ('检查异常交易', '查看近期是否有不明转账记录')
+            ],
+            '继续观察': [
+                ('记录可疑信息', '截图保存可疑短信、来电号码等'),
+                ('告知家人注意', '让家人帮忙留意后续情况'),
+                ('不轻信任何要求', '凡是要求转账、验证码的都是诈骗'),
+                ('保持手机安全软件开启', '确保手机安全软件处于运行状态')
+            ]
+        }
+        steps_data = step_content_map.get(disposal_type, [
+            ('保持冷静，不要慌张', '诈骗分子会制造紧迫感，不要上当'),
+            ('联系家人确认', '打给家人核实情况'),
+            ('保存证据并报警', '截图保存信息，拨打110')
+        ])
+        for idx, (content, tip) in enumerate(steps_data, 1):
+            st = StepCardStep(
+                step_card_id=sc.id,
+                step_number=idx,
+                content=content,
+                tip=tip
+            )
+            db.session.add(st)
+        h.step_card_id = sc.id
+
+    db.session.commit()
+    return jsonify(serialize_help(h))
+
+@risk_bp.route('/<int:help_id>/disposals', methods=['GET'])
+def get_risk_disposals(help_id):
+    disposals = RiskDisposal.query.filter_by(help_request_id=help_id).order_by(RiskDisposal.created_at.desc()).all()
+    return jsonify([serialize_risk_disposal(d) for d in disposals])
+
+@stats_bp.route('/risk', methods=['GET'])
+def stats_risk():
+    from sqlalchemy import func, desc
+
+    risk_helps = HelpRequest.query.filter_by(is_risk=True).all()
+    total_risk = len(risk_helps)
+
+    scam_type_counts = {}
+    for h in risk_helps:
+        if h.risk_info:
+            st = h.risk_info.scam_type
+            scam_type_counts[st] = scam_type_counts.get(st, 0) + 1
+    scam_type_distribution = [{'scam_type': k, 'count': v} for k, v in sorted(scam_type_counts.items(), key=lambda x: x[1], reverse=True)]
+
+    blocked_count = 0
+    total_involved_amount = 0.0
+    for h in risk_helps:
+        if h.risk_info and h.risk_info.involved_amount:
+            total_involved_amount += h.risk_info.involved_amount
+        for d in h.risk_disposals:
+            if d.disposal_type == '已阻止':
+                blocked_count += 1
+                break
+
+    response_durations = []
+    for h in risk_helps:
+        if h.responded_at and h.created_at:
+            delta = (h.responded_at - h.created_at).total_seconds() / 60
+            response_durations.append(delta)
+        elif h.assigned_at and h.created_at:
+            delta = (h.assigned_at - h.created_at).total_seconds() / 60
+            response_durations.append(delta)
+    avg_response = sum(response_durations) / len(response_durations) if response_durations else 0
+
+    keyword_counts = {}
+    for h in risk_helps:
+        if h.risk_info and h.risk_info.risk_keywords:
+            for kw in h.risk_info.risk_keywords.split(','):
+                kw = kw.strip()
+                if kw:
+                    keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
+    top_keywords = [{'keyword': k, 'count': v} for k, v in sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True)][:10]
+
+    disposal_type_counts = {}
+    for h in risk_helps:
+        for d in h.risk_disposals:
+            disposal_type_counts[d.disposal_type] = disposal_type_counts.get(d.disposal_type, 0) + 1
+    disposal_distribution = [{'disposal_type': k, 'count': v} for k, v in sorted(disposal_type_counts.items(), key=lambda x: x[1], reverse=True)]
+
+    leaked_vc_count = sum(1 for h in risk_helps if h.risk_info and h.risk_info.leaked_verification_code)
+    leaked_pp_count = sum(1 for h in risk_helps if h.risk_info and h.risk_info.leaked_payment_password)
+    clicked_link_count = sum(1 for h in risk_helps if h.risk_info and h.risk_info.clicked_link)
+
+    return jsonify({
+        'total_risk_requests': total_risk,
+        'scam_type_distribution': scam_type_distribution,
+        'blocked_count': blocked_count,
+        'total_involved_amount': round(total_involved_amount, 2),
+        'avg_response_minutes': round(avg_response, 1),
+        'top_risk_keywords': top_keywords,
+        'disposal_distribution': disposal_distribution,
+        'leaked_verification_code_count': leaked_vc_count,
+        'leaked_payment_password_count': leaked_pp_count,
+        'clicked_link_count': clicked_link_count
+    })

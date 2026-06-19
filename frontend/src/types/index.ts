@@ -44,6 +44,29 @@ export interface HelpAssignment {
   created_at?: string
 }
 
+export interface FraudRiskInfo {
+  id: number
+  help_request_id: number
+  scam_type: string
+  suspicious_source?: string
+  involved_amount: number
+  leaked_verification_code: boolean
+  leaked_payment_password: boolean
+  clicked_link: boolean
+  risk_keywords?: string
+  custom_description?: string
+  created_at?: string
+}
+
+export interface RiskDisposal {
+  id: number
+  help_request_id: number
+  disposal_type: '已阻止' | '需报警' | '需冻结支付' | '误报' | '继续观察'
+  note?: string
+  operator?: User
+  created_at?: string
+}
+
 export interface HelpRequest {
   id: number
   title: string
@@ -72,8 +95,12 @@ export interface HelpRequest {
   is_repeat: boolean
   transfer_count: number
   is_timeout: boolean
+  is_risk: boolean
+  risk_level?: 'high' | 'medium' | 'low'
+  risk_info?: FraudRiskInfo
+  risk_disposals: RiskDisposal[]
   processing_note?: string
-  create_source: 'direct' | 'practice'
+  create_source: 'direct' | 'practice' | 'risk_disposal'
   guidance_records: GuidanceRecord[]
   status_logs: HelpStatusLog[]
   assignments: HelpAssignment[]
@@ -200,7 +227,17 @@ export const PROBLEM_TYPES = [
   '支付设置',
   '声音太小',
   '不会拍照',
+  '防诈骗',
   '其他问题'
+] as const
+
+export const SCAM_TYPES = [
+  '陌生来电',
+  '短信链接',
+  '中奖弹窗',
+  '要求转账',
+  '索要验证码',
+  '远程控制'
 ] as const
 
 export const DEVICE_BRANDS = ['华为', '苹果', '小米', 'OPPO', 'vivo', '三星', '其他']
@@ -241,3 +278,16 @@ export interface DeviceStats {
 
 export const FONT_SIZE_OPTIONS = ['标准', '大', '超大'] as const
 export const NETWORK_OPTIONS = ['WiFi', '4G', '5G', '不确定'] as const
+
+export interface RiskStats {
+  total_risk_requests: number
+  scam_type_distribution: { scam_type: string; count: number }[]
+  blocked_count: number
+  total_involved_amount: number
+  avg_response_minutes: number
+  top_risk_keywords: { keyword: string; count: number }[]
+  disposal_distribution: { disposal_type: string; count: number }[]
+  leaked_verification_code_count: number
+  leaked_payment_password_count: number
+  clicked_link_count: number
+}

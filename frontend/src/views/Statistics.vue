@@ -12,7 +12,7 @@ import {
 } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { statsApi, helpApi } from '@/api'
-import type { StatsOverview, HelpRequest, DeviceStats, FamilyEfficiency } from '@/types'
+import type { StatsOverview, HelpRequest, DeviceStats, FamilyEfficiency, RiskStats } from '@/types'
 
 use([
   CanvasRenderer,
@@ -35,6 +35,7 @@ const timeline = ref<{ date: string; count: number }[]>([])
 const practiceStats = ref<PracticeStats | null>(null)
 const deviceStats = ref<DeviceStats | null>(null)
 const familyEfficiency = ref<FamilyEfficiency[]>([])
+const riskStats = ref<RiskStats | null>(null)
 
 const typeColors = {
   '看不清字': '#667eea',
@@ -474,6 +475,76 @@ const familyVolumeOption = computed(() => {
   }
 })
 
+const scamTypeDistributionOption = computed(() => {
+  const data = riskStats.value?.scam_type_distribution || []
+  const scamColors = ['#ef4444', '#f59e0b', '#667eea', '#8b5cf6', '#06b6d4', '#ec4899']
+  return {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} 次 ({d}%)' },
+    legend: {
+      bottom: 0,
+      left: 'center',
+      textStyle: { fontSize: 12 }
+    },
+    series: [{
+      type: 'pie',
+      radius: ['45%', '72%'],
+      center: ['50%', '42%'],
+      avoidLabelOverlap: true,
+      itemStyle: {
+        borderRadius: 8,
+        borderColor: '#fff',
+        borderWidth: 2
+      },
+      label: {
+        show: true,
+        formatter: '{b}\n{d}%',
+        fontSize: 12
+      },
+      data: data.map((item, idx) => ({
+        value: item.count,
+        name: item.scam_type,
+        itemStyle: { color: scamColors[idx % scamColors.length] }
+      }))
+    }]
+  }
+})
+
+const disposalDistributionOption = computed(() => {
+  const data = riskStats.value?.disposal_distribution || []
+  return {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} 次 ({d}%)' },
+    legend: {
+      bottom: 0,
+      left: 'center',
+      textStyle: { fontSize: 12 }
+    },
+    series: [{
+      type: 'pie',
+      radius: ['45%', '72%'],
+      center: ['50%', '42%'],
+      avoidLabelOverlap: true,
+      itemStyle: {
+        borderRadius: 8,
+        borderColor: '#fff',
+        borderWidth: 2
+      },
+      label: {
+        show: true,
+        formatter: '{b}\n{d}%',
+        fontSize: 12
+      },
+      data: data.map((item, idx) => {
+        const colors = ['#10b981', '#ef4444', '#f59e0b', '#64748b', '#667eea']
+        return {
+          value: item.count,
+          name: item.disposal_type,
+          itemStyle: { color: colors[idx % colors.length] }
+        }
+      })
+    }]
+  }
+})
+
 const fetchData = async () => {
   overview.value = await statsApi.overview()
   recentHelps.value = (await helpApi.list()).slice(0, 6)
@@ -481,6 +552,7 @@ const fetchData = async () => {
   practiceStats.value = await statsApi.practice()
   deviceStats.value = await statsApi.device()
   familyEfficiency.value = await statsApi.familyEfficiency()
+  try { riskStats.value = await statsApi.risk() } catch (e) { console.error(e) }
 }
 
 const formatTime = (t?: string) => {
@@ -826,24 +898,25 @@ onMounted(fetchData)
     <div class="family-efficiency-section mt-6">
       <h3 class="section-title mb-4">👨‍👩‍👧‍👦 家属响应效率分析</h3>
 
-      <div v-if="familyEfficiency.length > 0" class="grid grid-3 mb-6">
-        <div class="card">
-          <h3 class="section-title mb-4">📊 处理数量分布</h3>
-          <VChart :option="familyVolumeOption" style="height: 320px" autoresize />
+      <div v-if="familyEfficiency.length > 0">
+        <div class="grid grid-3 mb-6">
+          <div class="card">
+            <h3 class="section-title mb-4">📊 处理数量分布</h3>
+            <VChart :option="familyVolumeOption" style="height: 320px" autoresize />
+          </div>
+
+          <div class="card">
+            <h3 class="section-title mb-4">⏱️ 平均响应时长</h3>
+            <VChart :option="familyResponseTimeOption" style="height: 320px" autoresize />
+          </div>
+
+          <div class="card">
+            <h3 class="section-title mb-4">✅ 平均解决时长</h3>
+            <VChart :option="familyResolutionTimeOption" style="height: 320px" autoresize />
+          </div>
         </div>
 
         <div class="card">
-          <h3 class="section-title mb-4">⏱️ 平均响应时长</h3>
-          <VChart :option="familyResponseTimeOption" style="height: 320px" autoresize />
-        </div>
-
-        <div class="card">
-          <h3 class="section-title mb-4">✅ 平均解决时长</h3>
-          <VChart :option="familyResolutionTimeOption" style="height: 320px" autoresize />
-        </div>
-      </div>
-
-      <div class="card">
         <h3 class="section-title mb-4">📋 家属效率明细</h3>
         <div class="family-table">
           <div class="family-table-header">
@@ -904,6 +977,7 @@ onMounted(fetchData)
                 <span v-else class="duty-inactive">休息</span>
               </div>
             </div>
+            </div>
           </div>
         </div>
       </div>
@@ -912,6 +986,153 @@ onMounted(fetchData)
         <div class="empty-state" style="padding: 60px;">
           <div class="empty-state-icon">📊</div>
           <div>暂无家属效率数据</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="risk-stats-section mt-6">
+      <h3 class="section-title mb-4">🛡️ 风险求助分析</h3>
+
+      <div v-if="riskStats && riskStats.total_risk_requests > 0">
+        <div class="grid grid-4 mb-6">
+          <div class="card stat-card stat-red">
+            <div class="stat-icon">🛡️</div>
+            <div class="stat-info">
+              <div class="stat-label">风险求助总数</div>
+              <div class="stat-value">{{ riskStats.total_risk_requests }}</div>
+              <div class="stat-sub">标记为诈骗风险的求助</div>
+            </div>
+          </div>
+
+          <div class="card stat-card stat-green">
+            <div class="stat-icon">✅</div>
+            <div class="stat-info">
+              <div class="stat-label">成功拦截次数</div>
+              <div class="stat-value text-green">{{ riskStats.blocked_count }}</div>
+              <div class="stat-sub">已阻止的风险求助</div>
+            </div>
+          </div>
+
+          <div class="card stat-card stat-orange">
+            <div class="stat-icon">💰</div>
+            <div class="stat-info">
+              <div class="stat-label">涉及金额汇总</div>
+              <div class="stat-value">¥{{ riskStats.total_involved_amount }}</div>
+              <div class="stat-sub">所有风险求助涉及的总金额</div>
+            </div>
+          </div>
+
+          <div class="card stat-card stat-purple">
+            <div class="stat-icon">⏱️</div>
+            <div class="stat-info">
+              <div class="stat-label">平均响应时长</div>
+              <div class="stat-value">{{ riskStats.avg_response_minutes }} 分钟</div>
+              <div class="stat-sub">风险求助从发到响应的时间</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-2 mb-6">
+          <div class="card">
+            <h3 class="section-title mb-4">📊 诈骗类型分布</h3>
+            <VChart v-if="riskStats.scam_type_distribution.length" :option="scamTypeDistributionOption" style="height: 320px" autoresize />
+            <div v-else class="empty-state" style="padding: 40px;">
+              <div class="empty-state-icon">📊</div>
+              <div>暂无诈骗类型数据</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="section-title mb-4">📋 处置方式分布</h3>
+            <VChart v-if="riskStats.disposal_distribution.length" :option="disposalDistributionOption" style="height: 320px" autoresize />
+            <div v-else class="empty-state" style="padding: 40px;">
+              <div class="empty-state-icon">📋</div>
+              <div>暂无处置数据</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-3">
+          <div class="card">
+            <h3 class="section-title mb-4">🔑 高频风险关键词</h3>
+            <div class="keyword-list">
+              <div
+                v-for="(item, index) in riskStats.top_risk_keywords"
+                :key="index"
+                class="keyword-item"
+              >
+                <div :class="['keyword-rank', { 'rank-1': index === 0, 'rank-2': index === 1, 'rank-3': index === 2 }]">
+                  {{ index + 1 }}
+                </div>
+                <div class="keyword-name">{{ item.keyword }}</div>
+                <div class="keyword-count">
+                  <span class="count-num">{{ item.count }}</span>
+                  <span class="count-label">次</span>
+                </div>
+              </div>
+              <div v-if="!riskStats.top_risk_keywords.length" class="empty-state" style="padding: 30px;">
+                <div class="empty-state-icon">🔑</div>
+                <div>暂无关键词数据</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="section-title mb-4">⚠️ 风险泄露情况</h3>
+            <div class="leak-stats">
+              <div class="leak-item">
+                <div class="leak-icon">🔑</div>
+                <div class="leak-info">
+                  <div class="leak-label">泄露验证码</div>
+                  <div class="leak-value text-danger">{{ riskStats.leaked_verification_code_count }} 次</div>
+                </div>
+              </div>
+              <div class="leak-item">
+                <div class="leak-icon">🔐</div>
+                <div class="leak-info">
+                  <div class="leak-label">泄露支付密码</div>
+                  <div class="leak-value text-danger">{{ riskStats.leaked_payment_password_count }} 次</div>
+                </div>
+              </div>
+              <div class="leak-item">
+                <div class="leak-icon">🔗</div>
+                <div class="leak-info">
+                  <div class="leak-label">点击可疑链接</div>
+                  <div class="leak-value text-warning">{{ riskStats.clicked_link_count }} 次</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="section-title mb-4">📈 拦截率分析</h3>
+            <div class="interception-stats">
+              <div class="interception-main">
+                <div class="interception-icon">🛡️</div>
+                <div class="interception-rate">
+                  {{ riskStats.total_risk_requests > 0 ? (riskStats.blocked_count / riskStats.total_risk_requests * 100).toFixed(1) : 0 }}%
+                </div>
+                <div class="interception-label">风险拦截率</div>
+              </div>
+              <div class="interception-detail">
+                <div class="interception-bar">
+                  <div class="interception-fill" :style="{ width: (riskStats.total_risk_requests > 0 ? riskStats.blocked_count / riskStats.total_risk_requests * 100 : 0) + '%' }"></div>
+                </div>
+                <div class="interception-numbers">
+                  <span>已拦截 {{ riskStats.blocked_count }} 次</span>
+                  <span>共 {{ riskStats.total_risk_requests }} 次风险求助</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="card">
+        <div class="empty-state" style="padding: 60px;">
+          <div class="empty-state-icon">🛡️</div>
+          <div>暂无风险求助数据</div>
+          <p class="text-sm text-muted mt-2">当老人发起风险求助后，这里将展示防诈骗分析数据</p>
         </div>
       </div>
     </div>
@@ -1675,5 +1896,170 @@ onMounted(fetchData)
 .empty-state-icon {
   font-size: 48px;
   margin-bottom: 12px;
+}
+
+.risk-stats-section {
+  background: #fef2f2;
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid #fecaca;
+}
+
+.stat-red::before { background: linear-gradient(180deg, #ef4444, #dc2626); }
+
+.keyword-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.keyword-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border-radius: 12px;
+}
+
+.keyword-item:hover {
+  background: #fef2f2;
+  transform: translateX(4px);
+}
+
+.keyword-rank {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  background: #e2e8f0;
+  color: #64748b;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.keyword-rank.rank-1 { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color: #92400e; }
+.keyword-rank.rank-2 { background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%); color: #4338ca; }
+.keyword-rank.rank-3 { background: linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%); color: #be185d; }
+
+.keyword-name {
+  flex: 1;
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 15px;
+}
+
+.keyword-count .count-num {
+  font-size: 20px;
+  font-weight: 800;
+  color: #ef4444;
+}
+
+.keyword-count .count-label {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-left: 2px;
+}
+
+.leak-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.leak-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  background: #fef2f2;
+  border-radius: 12px;
+}
+
+.leak-icon {
+  font-size: 28px;
+  width: 48px;
+  height: 48px;
+  background: white;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.leak-info {
+  flex: 1;
+}
+
+.leak-label {
+  font-size: 14px;
+  color: #64748b;
+  margin-bottom: 2px;
+}
+
+.leak-value {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.text-danger { color: #dc2626 !important; }
+.text-warning { color: #f59e0b !important; }
+.text-safe { color: #16a34a !important; }
+
+.interception-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.interception-main {
+  text-align: center;
+  padding: 20px;
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border-radius: 16px;
+}
+
+.interception-icon {
+  font-size: 40px;
+  margin-bottom: 8px;
+}
+
+.interception-rate {
+  font-size: 42px;
+  font-weight: 800;
+  color: #166534;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.interception-label {
+  font-size: 14px;
+  color: #15803d;
+  font-weight: 600;
+}
+
+.interception-bar {
+  height: 12px;
+  background: #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.interception-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981 0%, #059669 100%);
+  border-radius: 6px;
+  transition: width 0.3s;
+}
+
+.interception-numbers {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #64748b;
+  margin-top: 8px;
 }
 </style>

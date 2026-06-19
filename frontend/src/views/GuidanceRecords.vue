@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { helpApi, stepcardApi, practiceApi, deviceApi, familyApi } from '@/api'
+import { helpApi, stepcardApi, practiceApi, deviceApi, familyApi, riskApi } from '@/api'
 import type { HelpRequest, PracticeRecord, StepCardStep, DeviceProfile, User, HelpStatusLog } from '@/types'
 import { useRouter } from 'vue-router'
 
@@ -40,6 +40,11 @@ const showAssignModal = ref(false)
 const assignToId = ref<number>(0)
 const assignReason = ref('')
 const recommendCandidates = ref<any[]>([])
+
+const showRiskDisposalModal = ref(false)
+const riskDisposalType = ref('')
+const riskDisposalNote = ref('')
+const shouldCreateStepCard = ref(true)
 
 const currentUserId = 2
 
@@ -348,6 +353,35 @@ const submitNote = async () => {
   }
 }
 
+const openRiskDisposal = () => {
+  if (!selectedHelp.value) return
+  riskDisposalType.value = ''
+  riskDisposalNote.value = ''
+  shouldCreateStepCard.value = true
+  showRiskDisposalModal.value = true
+}
+
+const submitRiskDisposal = async () => {
+  if (!selectedHelp.value || !riskDisposalType.value) {
+    alert('请选择处置类型')
+    return
+  }
+  try {
+    const result = await riskApi.addDisposal(selectedHelp.value.id, {
+      disposal_type: riskDisposalType.value,
+      note: riskDisposalNote.value,
+      operator_id: currentUserId,
+      create_step_card: shouldCreateStepCard.value
+    })
+    alert('风险处置已记录')
+    showRiskDisposalModal.value = false
+    await fetchHelps()
+    selectedHelp.value = result
+  } catch (e: any) {
+    alert(e.response?.data?.error || '处置失败')
+  }
+}
+
 const canClaim = computed(() => {
   if (!selectedHelp.value) return false
   return selectedHelp.value.status === 'pending' ||
@@ -416,6 +450,7 @@ onMounted(fetchAll)
             </span>
             <span v-if="h.is_repeat" class="badge badge-normal">重复问题</span>
             <span v-if="h.is_timeout" class="badge badge-danger">⚠️ 超时</span>
+            <span v-if="h.is_risk" class="badge badge-risk">🛡️ {{ h.risk_level === 'high' ? '高风险' : '风险' }}</span>
           </div>
           <div class="help-title">{{ h.title }}</div>
           <div class="help-meta">
@@ -485,6 +520,7 @@ onMounted(fetchAll)
               {{ getStatusLabel(selectedHelp.status) }}
             </span>
             <span v-if="selectedHelp.is_timeout" class="badge badge-danger">⚠️ 响应超时</span>
+            <span v-if="selectedHelp.is_risk" class="badge badge-risk">🛡️ {{ selectedHelp.risk_level === 'high' ? '高风险' : '中风险' }}</span>
           </div>
         </div>
 
@@ -503,6 +539,9 @@ onMounted(fetchAll)
           </button>
           <button v-if="isMyTask && selectedHelp.status === 'processing'" class="btn btn-info btn-sm" @click="openNoteModal">
             📝 添加备注
+          </button>
+          <button v-if="selectedHelp.is_risk && isMyTask" class="btn btn-danger btn-sm" @click="openRiskDisposal">
+            🛡️ 风险处置
           </button>
         </div>
 
@@ -540,6 +579,51 @@ onMounted(fetchAll)
                 预计响应：{{ selectedHelp.expected_response_minutes }} 分钟内
               </div>
             </div>
+          </div>
+        </div>
+
+        <div v-if="selectedHelp.is_risk && selectedHelp.risk_info" class="risk-info-section">
+          <h4 class="detail-subtitle">🛡️ 风险求助详情</h4>
+          <div class="risk-info-grid">
+            <div class="risk-info-item">
+              <span class="ri-label">风险等级</span>
+              <span :class="['ri-value', selectedHelp.risk_level === 'high' ? 'text-danger' : 'text-warning']">
+                {{ selectedHelp.risk_level === 'high' ? '🔴 高风险' : '🟡 中风险' }}
+              </span>
+            </div>
+            <div class="risk-info-item">
+              <span class="ri-label">诈骗类型</span>
+              <span class="ri-value">{{ selectedHelp.risk_info.scam_type }}</span>
+            </div>
+            <div class="risk-info-item">
+              <span class="ri-label">可疑来源</span>
+              <span class="ri-value">{{ selectedHelp.risk_info.suspicious_source || '未提供' }}</span>
+            </div>
+            <div class="risk-info-item">
+              <span class="ri-label">涉及金额</span>
+              <span class="ri-value text-danger">{{ selectedHelp.risk_info.involved_amount ? '¥' + selectedHelp.risk_info.involved_amount : '未涉及' }}</span>
+            </div>
+            <div class="risk-info-item">
+              <span class="ri-label">泄露验证码</span>
+              <span :class="['ri-value', selectedHelp.risk_info.leaked_verification_code ? 'text-danger' : 'text-safe']">
+                {{ selectedHelp.risk_info.leaked_verification_code ? '⚠️ 是' : '✅ 否' }}
+              </span>
+            </div>
+            <div class="risk-info-item">
+              <span class="ri-label">泄露支付密码</span>
+              <span :class="['ri-value', selectedHelp.risk_info.leaked_payment_password ? 'text-danger' : 'text-safe']">
+                {{ selectedHelp.risk_info.leaked_payment_password ? '⚠️ 是' : '✅ 否' }}
+              </span>
+            </div>
+            <div class="risk-info-item">
+              <span class="ri-label">点击可疑链接</span>
+              <span :class="['ri-value', selectedHelp.risk_info.clicked_link ? 'text-danger' : 'text-safe']">
+                {{ selectedHelp.risk_info.clicked_link ? '⚠️ 是' : '✅ 否' }}
+              </span>
+            </div>
+          </div>
+          <div v-if="selectedHelp.risk_info.custom_description" class="risk-custom-desc">
+            <span class="ri-label">补充描述：</span>{{ selectedHelp.risk_info.custom_description }}
           </div>
         </div>
 
@@ -902,6 +986,51 @@ onMounted(fetchAll)
         <div class="modal-footer">
           <button class="btn btn-secondary" @click="showDeviceSupplementModal = false">取消</button>
           <button class="btn btn-primary" @click="submitSupplement">确认补充</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showRiskDisposalModal" class="modal-overlay" @click.self="showRiskDisposalModal = false">
+      <div class="modal-content" style="max-width: 520px;">
+        <div class="modal-header">
+          <h3>🛡️ 风险求助处置</h3>
+          <button class="modal-close" @click="showRiskDisposalModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="selectedHelp?.risk_info" class="disposal-risk-summary">
+            <div class="drs-item"><strong>诈骗类型：</strong>{{ selectedHelp.risk_info.scam_type }}</div>
+            <div class="drs-item"><strong>涉及金额：</strong>{{ selectedHelp.risk_info.involved_amount ? '¥' + selectedHelp.risk_info.involved_amount : '无' }}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">处置方式 *</label>
+            <div class="disposal-options">
+              <button v-for="dt in ['已阻止', '需报警', '需冻结支付', '误报', '继续观察']" :key="dt"
+                :class="['disposal-btn', { active: riskDisposalType === dt }, 'disposal-' + dt]"
+                @click="riskDisposalType = dt">
+                {{ dt }}
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">处置备注</label>
+            <textarea v-model="riskDisposalNote" class="form-textarea" rows="3" placeholder="记录处置详情..."></textarea>
+          </div>
+          <label class="risk-check" style="margin-top: 12px;">
+            <input type="checkbox" v-model="shouldCreateStepCard" />
+            <span>同时生成防诈骗步骤卡</span>
+          </label>
+          <div v-if="selectedHelp?.risk_disposals && selectedHelp.risk_disposals.length > 0" class="existing-disposals">
+            <h4 class="detail-subtitle" style="margin-top: 16px;">📋 已有处置记录</h4>
+            <div v-for="d in selectedHelp.risk_disposals" :key="d.id" class="disposal-record">
+              <span :class="['disposal-type-badge', 'disposal-' + d.disposal_type]">{{ d.disposal_type }}</span>
+              <span class="text-sm text-muted">{{ d.operator?.name || '家属' }} · {{ formatTime(d.created_at) }}</span>
+              <span v-if="d.note" class="text-sm">{{ d.note }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showRiskDisposalModal = false">取消</button>
+          <button class="btn btn-danger" :disabled="!riskDisposalType" @click="submitRiskDisposal">确认处置</button>
         </div>
       </div>
     </div>
@@ -2091,3 +2220,156 @@ onMounted(fetchAll)
   font-size: 48px;
   margin-bottom: 8px;
 }
+
+.badge-risk {
+  background: #fef2f2 !important;
+  color: #dc2626 !important;
+}
+
+.risk-info-section {
+  padding: 16px;
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border-radius: 12px;
+  border: 2px solid #fca5a5;
+}
+
+.risk-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.risk-info-item {
+  padding: 10px 12px;
+  background: white;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ri-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.ri-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.text-danger {
+  color: #dc2626 !important;
+}
+
+.text-warning {
+  color: #f59e0b !important;
+}
+
+.text-safe {
+  color: #16a34a !important;
+}
+
+.risk-custom-desc {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: white;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #334155;
+  line-height: 1.6;
+}
+
+.disposal-risk-summary {
+  padding: 12px 16px;
+  background: #fef2f2;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  display: flex;
+  gap: 20px;
+}
+
+.drs-item {
+  font-size: 14px;
+  color: #334155;
+}
+
+.disposal-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.disposal-btn {
+  padding: 10px 18px;
+  border: 2px solid #e2e8f0;
+  background: white;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #475569;
+}
+
+.disposal-btn:hover {
+  border-color: #ef4444;
+}
+
+.disposal-btn.active {
+  color: white;
+  border-color: transparent;
+}
+
+.disposal-btn.disposal-已阻止.active { background: #10b981; }
+.disposal-btn.disposal-需报警.active { background: #ef4444; }
+.disposal-btn.disposal-需冻结支付.active { background: #f59e0b; }
+.disposal-btn.disposal-误报.active { background: #64748b; }
+.disposal-btn.disposal-继续观察.active { background: #667eea; }
+
+.existing-disposals {
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.disposal-record {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.disposal-type-badge {
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.disposal-type-badge.disposal-已阻止 { background: #dcfce7; color: #166534; }
+.disposal-type-badge.disposal-需报警 { background: #fee2e2; color: #dc2626; }
+.disposal-type-badge.disposal-需冻结支付 { background: #fef3c7; color: #92400e; }
+.disposal-type-badge.disposal-误报 { background: #f1f5f9; color: #64748b; }
+.disposal-type-badge.disposal-继续观察 { background: #dbeafe; color: #1e40af; }
+
+.risk-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.risk-check input {
+  width: 18px;
+  height: 18px;
+}
+</style>

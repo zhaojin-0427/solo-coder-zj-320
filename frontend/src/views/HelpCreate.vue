@@ -2,7 +2,7 @@
 import { ref, watch, onBeforeUnmount, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { helpApi, stepcardApi, deviceApi } from '@/api'
-import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, type StepCard, type DeviceProfile, type HelpRequest } from '@/types'
+import { PROBLEM_TYPES, DEVICE_BRANDS, SYSTEM_VERSIONS, SCAM_TYPES, type StepCard, type DeviceProfile, type HelpRequest } from '@/types'
 
 const router = useRouter()
 
@@ -20,6 +20,36 @@ const isLoadingSuggestions = ref(false)
 const deviceProfile = ref<DeviceProfile | null>(null)
 const currentHelp = ref<HelpRequest | null>(null)
 let statusPollingTimer: number | null = null
+
+const isRiskMode = ref(false)
+const riskInfo = ref({
+  scam_type: '',
+  suspicious_source: '',
+  involved_amount: 0,
+  leaked_verification_code: false,
+  leaked_payment_password: false,
+  clicked_link: false,
+  risk_keywords: '',
+  custom_description: ''
+})
+
+const riskScenarios: { type: string; icon: string; desc: string }[] = [
+  { type: '陌生来电', icon: '📱', desc: '接到可疑电话，对方要求操作' },
+  { type: '短信链接', icon: '📩', desc: '收到不明短信，含可疑链接' },
+  { type: '中奖弹窗', icon: '🎁', desc: '手机弹出中奖提示' },
+  { type: '要求转账', icon: '💸', desc: '对方要求转账汇款' },
+  { type: '索要验证码', icon: '🔑', desc: '对方索要手机验证码' },
+  { type: '远程控制', icon: '🖥️', desc: '对方要求远程操控手机' }
+]
+
+const selectRiskScenario = (type: string) => {
+  isRiskMode.value = true
+  riskInfo.value.scam_type = type
+  problemType.value = '防诈骗'
+  if (!title.value) {
+    title.value = type + '风险求助'
+  }
+}
 
 const loadDeviceProfile = async () => {
   try {
@@ -209,7 +239,8 @@ const submitHelp = async () => {
       system_version: systemVersion.value,
       image_url: imageUrl.value,
       audio_url: audioUrl.value || undefined,
-      device_profile_id: deviceProfile.value?.id
+      device_profile_id: deviceProfile.value?.id,
+      risk_info: isRiskMode.value && riskInfo.value.scam_type ? riskInfo.value : undefined
     })
     currentHelp.value = help
     
@@ -247,6 +278,17 @@ const resetForm = () => {
   problemType.value = ''
   title.value = ''
   description.value = ''
+  isRiskMode.value = false
+  riskInfo.value = {
+    scam_type: '',
+    suspicious_source: '',
+    involved_amount: 0,
+    leaked_verification_code: false,
+    leaked_payment_password: false,
+    clicked_link: false,
+    risk_keywords: '',
+    custom_description: ''
+  }
   if (deviceProfile.value) {
     deviceBrand.value = deviceProfile.value.device_brand || ''
     systemVersion.value = deviceProfile.value.system_version || ''
@@ -393,6 +435,57 @@ onMounted(loadDeviceProfile)
           <div class="quick-type">{{ opt.type }}</div>
           <div class="quick-desc">{{ opt.desc }}</div>
         </button>
+      </div>
+    </div>
+
+    <div class="card mb-6 risk-alert-section">
+      <h3 class="section-title">🛡️ 防诈骗风险求助</h3>
+      <p class="text-muted mb-4">如果您遇到可疑情况，请选择对应的风险场景，系统将优先通知家属</p>
+      <div class="grid grid-3">
+        <button
+          v-for="rs in riskScenarios"
+          :key="rs.type"
+          class="risk-card"
+          :class="{ active: isRiskMode && riskInfo.scam_type === rs.type }"
+          @click="selectRiskScenario(rs.type)"
+        >
+          <div class="risk-icon">{{ rs.icon }}</div>
+          <div class="risk-type">{{ rs.type }}</div>
+          <div class="risk-desc">{{ rs.desc }}</div>
+        </button>
+      </div>
+    </div>
+
+    <div v-if="isRiskMode" class="card mb-6 risk-detail-section">
+      <h3 class="section-title">⚠️ 风险详情补充</h3>
+      <p class="text-muted mb-4">补充以下信息有助于家属更快速判断风险程度</p>
+      <div class="grid grid-2">
+        <div class="form-group">
+          <label class="form-label">可疑信息来源</label>
+          <input v-model="riskInfo.suspicious_source" class="form-input" placeholder="例如：+86 138****5678" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">涉及金额（元）</label>
+          <input v-model.number="riskInfo.involved_amount" class="form-input" type="number" min="0" placeholder="0" />
+        </div>
+      </div>
+      <div class="risk-check-group">
+        <label class="risk-check">
+          <input type="checkbox" v-model="riskInfo.leaked_verification_code" />
+          <span>是否已泄露验证码</span>
+        </label>
+        <label class="risk-check">
+          <input type="checkbox" v-model="riskInfo.leaked_payment_password" />
+          <span>是否已泄露支付密码</span>
+        </label>
+        <label class="risk-check">
+          <input type="checkbox" v-model="riskInfo.clicked_link" />
+          <span>是否已点击可疑链接</span>
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="form-label">其他描述（可选）</label>
+        <textarea v-model="riskInfo.custom_description" class="form-textarea" rows="2" placeholder="描述具体情况，如对方说了什么、要求做什么..."></textarea>
       </div>
     </div>
 
@@ -1248,5 +1341,74 @@ onMounted(loadDeviceProfile)
 .badge-hard {
   background: #fee2e2;
   color: #dc2626;
+}
+
+.risk-alert-section {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border-left: 4px solid #ef4444;
+}
+
+.risk-card {
+  background: white;
+  border: 3px solid transparent;
+  border-radius: 16px;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.risk-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.15);
+}
+
+.risk-card.active {
+  border-color: #ef4444;
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+}
+
+.risk-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.risk-type {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.risk-desc {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 4px;
+}
+
+.risk-detail-section {
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  border-left: 4px solid #f59e0b;
+}
+
+.risk-check-group {
+  display: flex;
+  gap: 24px;
+  margin: 16px 0;
+  flex-wrap: wrap;
+}
+
+.risk-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: #dc2626;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.risk-check input {
+  width: 18px;
+  height: 18px;
 }
 </style>

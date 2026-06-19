@@ -39,6 +39,8 @@ class HelpRequest(db.Model):
     is_repeat = db.Column(db.Boolean, default=False)
     transfer_count = db.Column(db.Integer, default=0)
     is_timeout = db.Column(db.Boolean, default=False)
+    is_risk = db.Column(db.Boolean, default=False)
+    risk_level = db.Column(db.String(20))
     processing_note = db.Column(db.Text)
     device_profile_id = db.Column(db.Integer, db.ForeignKey('device_profiles.id'))
     create_source = db.Column(db.String(20), default='direct')
@@ -50,6 +52,8 @@ class HelpRequest(db.Model):
     device_profile = db.relationship('DeviceProfile', backref='help_requests')
     status_logs = db.relationship('HelpStatusLog', backref='help_request', cascade='all, delete-orphan')
     assignments = db.relationship('HelpAssignment', backref='help_request', cascade='all, delete-orphan')
+    risk_info = db.relationship('FraudRiskInfo', backref='help_request', uselist=False, cascade='all, delete-orphan')
+    risk_disposals = db.relationship('RiskDisposal', backref='help_request', cascade='all, delete-orphan')
 
 class GuidanceRecord(db.Model):
     __tablename__ = 'guidance_records'
@@ -178,3 +182,28 @@ class HelpAssignment(db.Model):
 
     from_helper = db.relationship('User', foreign_keys=[from_helper_id])
     to_helper = db.relationship('User', foreign_keys=[to_helper_id])
+
+class FraudRiskInfo(db.Model):
+    __tablename__ = 'fraud_risk_infos'
+    id = db.Column(db.Integer, primary_key=True)
+    help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'), nullable=False, unique=True)
+    scam_type = db.Column(db.String(50), nullable=False)
+    suspicious_source = db.Column(db.String(200))
+    involved_amount = db.Column(db.Float, default=0)
+    leaked_verification_code = db.Column(db.Boolean, default=False)
+    leaked_payment_password = db.Column(db.Boolean, default=False)
+    clicked_link = db.Column(db.Boolean, default=False)
+    risk_keywords = db.Column(db.Text)
+    custom_description = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class RiskDisposal(db.Model):
+    __tablename__ = 'risk_disposals'
+    id = db.Column(db.Integer, primary_key=True)
+    help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'), nullable=False)
+    disposal_type = db.Column(db.String(30), nullable=False)
+    note = db.Column(db.Text)
+    operator_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    operator = db.relationship('User', foreign_keys=[operator_id])
